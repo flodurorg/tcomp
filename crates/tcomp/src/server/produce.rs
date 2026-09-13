@@ -1,6 +1,6 @@
-use crate::auth::{authorize, Access};
-use crate::session::Session;
-use crate::App;
+use crate::server::auth::{authorize, Access};
+use crate::server::session::Session;
+use crate::server::App;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;

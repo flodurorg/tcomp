@@ -1,8 +1,8 @@
-mod auth;
-mod config;
-mod produce;
-mod session;
-mod view;
+pub mod auth;
+pub mod config;
+pub mod produce;
+pub mod session;
+pub mod view;
 
 use auth::{authorize, Access};
 use axum::extract::{Path, State};
@@ -22,16 +22,10 @@ pub struct App {
     pub store: Store,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "tcomp_relay=info,tower_http=warn".into()),
-        )
-        .init();
-
-    let config = Arc::new(Config::from_env());
+/// Start the relay server. Resolves once the server stops (signal or error).
+/// `on_ready` is called with the bound address just before accepting connections.
+pub async fn serve(config: Config, on_ready: impl FnOnce(&str)) -> anyhow::Result<()> {
+    let config = Arc::new(config);
     let app = App {
         config: config.clone(),
         store: Store::default(),
@@ -65,8 +59,21 @@ async fn main() -> anyhow::Result<()> {
         .with_state(app);
 
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
-    tracing::info!(bind = %config.bind, public_url = %config.public_url, "tcomp-relay listening");
+    let bound = listener.local_addr()?.to_string();
 
+    // If public_url was left blank (standalone mode), derive it from the bound address.
+    let config = if config.public_url.is_empty() {
+        let mut c = (*config).clone();
+        c.public_url = format!("http://{bound}");
+        Arc::new(c)
+    } else {
+        config
+    };
+
+    tracing::info!(bind = %bound, public_url = %config.public_url, "tcomp relay listening");
+    on_ready(&bound);
+
+    const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
     let served = axum::serve(listener, router).with_graceful_shutdown(terminated());
     tokio::select! {
         result = served => result?,
@@ -74,20 +81,18 @@ async fn main() -> anyhow::Result<()> {
             tracing::warn!("sockets still open after {SHUTDOWN_GRACE:?}, exiting anyway");
         }
     }
-    tracing::info!("tcomp-relay stopped");
+    tracing::info!("tcomp relay stopped");
     Ok(())
 }
-
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 async fn terminated() {
     use tokio::signal::unix::{signal, SignalKind};
     let mut terminate = match signal(SignalKind::terminate()) {
-        Ok(stream) => stream,
+        Ok(s) => s,
         Err(_) => return std::future::pending().await,
     };
     let mut interrupt = match signal(SignalKind::interrupt()) {
-        Ok(stream) => stream,
+        Ok(s) => s,
         Err(_) => return std::future::pending().await,
     };
     tokio::select! {

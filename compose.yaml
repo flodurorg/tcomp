@@ -11,7 +11,7 @@ services:
       TCOMP_PUBLIC_URL: ${TCOMP_PUBLIC_URL:-http://localhost:8080}
       TCOMP_ENDED_TTL: ${TCOMP_ENDED_TTL:-60}
       TCOMP_STALE_TTL: ${TCOMP_STALE_TTL:-14400}
-      RUST_LOG: ${RUST_LOG:-tcomp_relay=info}
+      RUST_LOG: ${RUST_LOG:-tcomp=info}
     develop:
       watch:
         - action: sync

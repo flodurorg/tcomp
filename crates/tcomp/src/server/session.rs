@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::server::config::Config;
 use bytes::Bytes;
 use dashmap::DashMap;
 use proto::{SessionInfo, Status};

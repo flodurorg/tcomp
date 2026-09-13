@@ -1,9 +1,10 @@
 mod modes;
 mod relay;
+mod server;
 mod term;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{ErrorKind, Read, Write};
 use std::time::Duration;
@@ -13,31 +14,43 @@ use tokio::sync::mpsc::UnboundedSender;
 #[derive(Parser, Debug)]
 #[command(
     name = "tcomp",
-    about = "terminal companion — run a command and broadcast a read-only view"
+    about = "terminal companion — share a terminal session in the browser",
+    // Allow `tcomp -- bash` as shorthand for standalone mode
+    args_conflicts_with_subcommands = true,
 )]
-struct Args {
-    /// Relay base URL, e.g. https://tcomp.example.com
-    #[arg(long, env = "TCOMP_RELAY")]
-    relay: Option<String>,
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Cmd>,
 
-    /// Label shown in the web UI (defaults to hostname)
-    #[arg(long, env = "TCOMP_NAME")]
+    // Bare `tcomp [opts] -- <cmd>` → standalone mode
+    #[arg(long, env = "TCOMP_NAME", global = true)]
     name: Option<String>,
 
-    /// Shared secret presented to the relay
-    #[arg(long, env = "TCOMP_TOKEN")]
+    #[arg(long, env = "TCOMP_TOKEN", global = true)]
     token: Option<String>,
 
-    /// Run the command without connecting to a relay
-    #[arg(long)]
-    local: bool,
-
     /// Let the web view type into this terminal
-    #[arg(long)]
+    #[arg(long, env = "TCOMP_ALLOW_INPUT", global = true)]
     allow_input: bool,
 
-    #[arg(last = true, required = true)]
-    command: Vec<String>,
+    #[arg(last = true)]
+    cmd: Vec<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Cmd {
+    /// Run the relay server (used by Docker)
+    Serve,
+
+    /// Connect a command to an existing relay
+    Run {
+        /// Relay base URL, e.g. https://tcomp.example.com
+        #[arg(long, env = "TCOMP_RELAY")]
+        relay: String,
+
+        #[arg(last = true, required = true)]
+        cmd: Vec<String>,
+    },
 }
 
 pub enum Event {
@@ -47,16 +60,75 @@ pub enum Event {
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let cli = Cli::parse();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let code = runtime.block_on(run(args))?;
-    term::restore();
-    std::process::exit(code);
+
+    match cli.command {
+        Some(Cmd::Serve) => {
+            runtime.block_on(run_serve())?;
+            Ok(())
+        }
+        Some(Cmd::Run { relay, cmd }) => {
+            let code = runtime.block_on(run_pty(
+                cmd,
+                PtyMode::Remote { relay },
+                cli.name,
+                cli.token,
+                cli.allow_input,
+            ))?;
+            term::restore();
+            std::process::exit(code);
+        }
+        None => {
+            if cli.cmd.is_empty() {
+                eprintln!("usage: tcomp [--relay URL] -- <command> [args...]");
+                eprintln!("       tcomp serve");
+                std::process::exit(1);
+            }
+            let code = runtime.block_on(run_pty(
+                cli.cmd,
+                PtyMode::Standalone,
+                cli.name,
+                cli.token,
+                cli.allow_input,
+            ))?;
+            term::restore();
+            std::process::exit(code);
+        }
+    }
 }
 
-async fn run(args: Args) -> Result<i32> {
+enum PtyMode {
+    /// Spin up an embedded relay on a random local port, print the URL, then connect.
+    Standalone,
+    /// Connect to an externally-running relay.
+    Remote { relay: String },
+}
+
+async fn run_serve() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "tcomp=info,tower_http=warn".into()),
+        )
+        .init();
+
+    let config = server::config::Config::from_env();
+    server::serve(config, |addr| {
+        tracing::info!(bind = %addr, "tcomp relay ready");
+    })
+    .await
+}
+
+async fn run_pty(
+    command: Vec<String>,
+    mode: PtyMode,
+    name: Option<String>,
+    token: Option<String>,
+    allow_input: bool,
+) -> Result<i32> {
     let (cols, rows) = term::size();
 
     let pair = native_pty_system().openpty(PtySize {
@@ -66,8 +138,8 @@ async fn run(args: Args) -> Result<i32> {
         pixel_height: 0,
     })?;
 
-    let mut builder = CommandBuilder::new(&args.command[0]);
-    for arg in &args.command[1..] {
+    let mut builder = CommandBuilder::new(&command[0]);
+    for arg in &command[1..] {
         builder.arg(arg);
     }
     if let Ok(cwd) = std::env::current_dir() {
@@ -78,7 +150,7 @@ async fn run(args: Args) -> Result<i32> {
     let mut child = pair
         .slave
         .spawn_command(builder)
-        .with_context(|| format!("failed to spawn {}", args.command[0]))?;
+        .with_context(|| format!("failed to spawn {}", command[0]))?;
     drop(pair.slave);
 
     let master = pair.master;
@@ -89,26 +161,53 @@ async fn run(args: Args) -> Result<i32> {
 
     let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     let (writes_tx, writes_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    let relay_url = if args.local { None } else { args.relay.clone() };
+
+    // Resolve the relay URL — for Standalone, start an embedded server first.
+    let relay_url: Option<String> = match mode {
+        PtyMode::Remote { relay } => Some(relay),
+        PtyMode::Standalone => {
+            // Bind on a random port, start relay in background.
+            let cfg = server::config::Config {
+                bind: "127.0.0.1:0".into(),
+                public_url: String::new(), // filled in after bind
+                web_dir: web_dir(),
+                ..server::config::Config::from_env()
+            };
+            // Channel so the server can hand us the bound address.
+            let (addr_tx, addr_rx) = tokio::sync::oneshot::channel::<String>();
+            let mut addr_tx = Some(addr_tx);
+            tokio::spawn(async move {
+                let _ = server::serve(cfg, move |addr| {
+                    if let Some(tx) = addr_tx.take() {
+                        let _ = tx.send(addr.to_string());
+                    }
+                })
+                .await;
+            });
+            let addr = addr_rx.await.context("embedded relay did not start")?;
+            Some(format!("http://{addr}"))
+        }
+    };
+
     let relay_tx = relay_url.as_ref().map(|_| events_tx.clone());
 
     let relay_task = match relay_url {
         Some(url) => {
             let params = relay::Params {
                 relay: url,
-                name: args.name.clone().unwrap_or_else(hostname),
-                cmd: args.command.join(" "),
-                token: args.token.clone(),
+                name: name.unwrap_or_else(hostname),
+                cmd: command.join(" "),
+                token,
                 cols,
                 rows,
-                input: args.allow_input,
+                input: allow_input,
             };
-            let writes = args.allow_input.then_some(writes_tx.clone());
+            let writes = allow_input.then_some(writes_tx.clone());
             tokio::spawn(relay::run(params, events_rx, writes))
         }
         None => tokio::spawn(async move {
-            let mut events_rx = events_rx;
-            while events_rx.recv().await.is_some() {}
+            let mut rx = events_rx;
+            while rx.recv().await.is_some() {}
         }),
     };
 
@@ -130,18 +229,18 @@ async fn run(args: Args) -> Result<i32> {
     let code = loop {
         tokio::select! {
             _ = winch.recv() => {
-                let (cols, rows) = term::size();
-                let _ = master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
-                let _ = events_tx.send(Event::Resize { cols, rows });
+                let (c, r) = term::size();
+                let _ = master.resize(PtySize { rows: r, cols: c, pixel_width: 0, pixel_height: 0 });
+                let _ = events_tx.send(Event::Resize { cols: c, rows: r });
             }
             _ = term_sig.recv() => {
-                let mut killer = killer;
-                let _ = killer.kill();
+                let mut k = killer;
+                let _ = k.kill();
                 break 143;
             }
             _ = hup_sig.recv() => {
-                let mut killer = killer;
-                let _ = killer.kill();
+                let mut k = killer;
+                let _ = k.kill();
                 break 129;
             }
             status = &mut exit_rx => {
@@ -156,9 +255,7 @@ async fn run(args: Args) -> Result<i32> {
 
     let _ = tokio::time::timeout(
         Duration::from_millis(500),
-        tokio::task::spawn_blocking(move || {
-            let _ = output_done.join();
-        }),
+        tokio::task::spawn_blocking(move || { let _ = output_done.join(); }),
     )
     .await;
 
@@ -179,14 +276,10 @@ fn pump_output(mut reader: Box<dyn Read + Send>, relay: Option<UnboundedSender<E
             Ok(n) => {
                 let chunk = &buf[..n];
                 modes::observe(&mut pending, chunk);
-                if stdout.write_all(chunk).is_err() {
-                    break;
-                }
+                if stdout.write_all(chunk).is_err() { break; }
                 let _ = stdout.flush();
                 if let Some(tx) = &relay {
-                    if tx.send(Event::Output(chunk.to_vec())).is_err() {
-                        break;
-                    }
+                    if tx.send(Event::Output(chunk.to_vec())).is_err() { break; }
                 }
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -201,11 +294,7 @@ fn pump_stdin(writes: std::sync::mpsc::Sender<Vec<u8>>) {
     loop {
         match stdin.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => {
-                if writes.send(buf[..n].to_vec()).is_err() {
-                    break;
-                }
-            }
+            Ok(n) => { if writes.send(buf[..n].to_vec()).is_err() { break; } }
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
@@ -214,9 +303,7 @@ fn pump_stdin(writes: std::sync::mpsc::Sender<Vec<u8>>) {
 
 fn pump_writes(mut writer: Box<dyn Write + Send>, writes: std::sync::mpsc::Receiver<Vec<u8>>) {
     while let Ok(chunk) = writes.recv() {
-        if writer.write_all(&chunk).is_err() {
-            break;
-        }
+        if writer.write_all(&chunk).is_err() { break; }
         let _ = writer.flush();
     }
 }
@@ -227,4 +314,23 @@ fn hostname() -> String {
         .ok()
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Locate the web directory relative to the binary or cwd.
+fn web_dir() -> String {
+    // Running from the repo root (dev): use ./web
+    if std::path::Path::new("web/index.html").exists() {
+        return "web".into();
+    }
+    // Installed alongside the binary
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join("web");
+            if candidate.join("index.html").exists() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+    // Fallback: let Config::from_env() default handle it
+    server::config::Config::from_env().web_dir
 }

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::config::Config;
+use crate::server::config::Config;
 use axum::http::{HeaderMap, StatusCode};
 
 #[derive(Debug, Clone)]

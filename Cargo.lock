@@ -1366,33 +1366,20 @@ name = "tcomp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
- "clap",
- "crossterm",
- "futures-util",
- "portable-pty",
- "proto",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.30.0",
-]
-
-[[package]]
-name = "tcomp-relay"
-version = "0.1.0"
-dependencies = [
- "anyhow",
  "avt",
  "axum",
  "bytes",
+ "clap",
+ "crossterm",
  "dashmap",
  "futures-util",
+ "portable-pty",
  "proto",
  "rand 0.10.2",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "tower-http",
  "tracing",
  "tracing-subscriber",
