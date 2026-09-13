@@ -29,12 +29,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: hidden;
+    overflow: auto;
     padding: 10px;
     background: #05070b;
   }
 
-  #host { transform-origin: top left; }
   body.frozen #host { filter: grayscale(.85) brightness(.82); }
   .xterm .xterm-viewport { overflow-y: auto; }
 
@@ -97,17 +96,19 @@ const host = document.getElementById('host');
 const badge = document.getElementById('badge');
 const notice = document.getElementById('notice');
 const BASE_FONT = 15;
-const MAX_SCALE = 3;
+const MIN_FONT = 4;
+const MAX_FONT = 34;
 const PAD = 10;
 
 let term = null;
 let socket = null;
 let cols = 80;
 let rows = 24;
-let tries = 0;
+let passes = 0;
 let backoff = 500;
 let allowInput = false;
 let status = 'live';
+let failures = 0;
 const encoder = new TextEncoder();
 const keybar = document.getElementById('keybar');
 
@@ -123,7 +124,6 @@ function ensureTerminal() {
     theme: { background: '#05070b', foreground: '#dbe3ef' },
   });
   term.open(host);
-  term.onRender(scheduleFit);
   term.onData(send);
   scheduleFit();
 }
@@ -150,7 +150,7 @@ function screenEl() {
 }
 
 function scheduleFit() {
-  tries = 0;
+  passes = 0;
   requestAnimationFrame(refit);
 }
 
@@ -158,25 +158,25 @@ function refit() {
   if (!term) return;
   const el = screenEl();
   if (!el || !el.offsetWidth) {
-    if (tries++ < 20) requestAnimationFrame(refit);
+    if (passes++ < 20) requestAnimationFrame(refit);
     return;
   }
-
-  const width = el.offsetWidth;
-  const height = el.offsetHeight;
-  if (!width || !height) return;
 
   const chrome = document.querySelector('.topbar').offsetHeight
     + (notice.classList.contains('show') ? notice.offsetHeight : 0)
     + (keybar.classList.contains('show') ? keybar.offsetHeight : 0);
   const availW = Math.max(60, document.documentElement.clientWidth - PAD);
   const availH = Math.max(60, document.documentElement.clientHeight - chrome - PAD);
-  const scale = Math.min(availW / width, availH / height, MAX_SCALE);
 
-  host.style.transformOrigin = 'top left';
-  host.style.transform = `scale(${scale})`;
-  host.style.width = `${width * scale}px`;
-  host.style.height = `${height * scale}px`;
+  const ratio = Math.min(availW / el.offsetWidth, availH / el.offsetHeight);
+  const current = term.options.fontSize;
+  const next = Math.min(MAX_FONT, Math.max(MIN_FONT, Math.floor(current * ratio * 2) / 2));
+
+  if (next !== current && passes++ < 6) {
+    term.options.fontSize = next;
+    setTimeout(refit, 60);
+    return;
+  }
   document.getElementById('size').textContent = `${cols}\u00d7${rows}`;
 }
 
@@ -200,6 +200,7 @@ function applyStatus(next, exitCode) {
 
 function onControl(frame) {
   if (frame.t === 'init') {
+    failures = 0;
     cols = frame.cols;
     rows = frame.rows;
     document.getElementById('name').textContent = frame.name;
@@ -241,6 +242,16 @@ function connect() {
   socket = ws;
   ws.onopen = () => { backoff = 500; };
   ws.onclose = () => {
+    if (++failures >= 3) {
+      badge.className = 'badge stale';
+      badge.textContent = 'gone';
+      notice.textContent =
+        'This session no longer exists — it expired, or the relay restarted and '
+        + 'the host reconnected under a new URL. Check the session list.';
+      notice.classList.add('show');
+      document.body.classList.add('frozen');
+      return;
+    }
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 15000);
   };

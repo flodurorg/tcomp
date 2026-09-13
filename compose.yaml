@@ -3,6 +3,9 @@ services:
     build: .
     ports:
       - "8080:8080"
+    volumes:
+      - ./web:/app/web:ro
+    stop_grace_period: 5s
     environment:
       TCOMP_BIND: 0.0.0.0:8080
       TCOMP_PUBLIC_URL: ${TCOMP_PUBLIC_URL:-http://localhost:8080}

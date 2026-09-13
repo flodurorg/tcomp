@@ -66,8 +66,34 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     tracing::info!(bind = %config.bind, public_url = %config.public_url, "tcomp-relay listening");
-    axum::serve(listener, router).await?;
+
+    let served = axum::serve(listener, router).with_graceful_shutdown(terminated());
+    tokio::select! {
+        result = served => result?,
+        _ = async { terminated().await; tokio::time::sleep(SHUTDOWN_GRACE).await } => {
+            tracing::warn!("sockets still open after {SHUTDOWN_GRACE:?}, exiting anyway");
+        }
+    }
+    tracing::info!("tcomp-relay stopped");
     Ok(())
+}
+
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+async fn terminated() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut terminate = match signal(SignalKind::terminate()) {
+        Ok(stream) => stream,
+        Err(_) => return std::future::pending().await,
+    };
+    let mut interrupt = match signal(SignalKind::interrupt()) {
+        Ok(stream) => stream,
+        Err(_) => return std::future::pending().await,
+    };
+    tokio::select! {
+        _ = terminate.recv() => {}
+        _ = interrupt.recv() => {}
+    }
 }
 
 async fn index(State(app): State<App>, headers: HeaderMap) -> Response {

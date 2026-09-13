@@ -1,3 +1,4 @@
+mod modes;
 mod relay;
 mod term;
 
@@ -171,11 +172,13 @@ async fn run(args: Args) -> Result<i32> {
 fn pump_output(mut reader: Box<dyn Read + Send>, relay: Option<UnboundedSender<Event>>) {
     let mut stdout = std::io::stdout();
     let mut buf = [0u8; 16384];
+    let mut pending = Vec::new();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
                 let chunk = &buf[..n];
+                modes::observe(&mut pending, chunk);
                 if stdout.write_all(chunk).is_err() {
                     break;
                 }

@@ -54,7 +54,10 @@ pub async fn run(
     loop {
         match connect(&url, &params, &session, cols, rows).await {
             Ok((mut socket, ack)) => {
-                if session.is_none() {
+                if session.as_deref() != Some(ack.session.as_str()) {
+                    if session.is_some() {
+                        eprint!("tcomp: relay lost the old session\r\n");
+                    }
                     eprint!("tcomp: watch at {}\r\n", ack.url);
                 }
                 session = Some(ack.session);

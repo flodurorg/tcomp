@@ -62,7 +62,8 @@ docker compose up --build          # :8080
 docker compose watch               # same, reloads web/ on edit
 ```
 
-`web/` is read from disk per request, so viewer changes need no rebuild.
+`web/` is bind-mounted and read from disk per request, so viewer changes need no
+rebuild — reload the page. Rust changes need `--build`.
 
 ## Client
 

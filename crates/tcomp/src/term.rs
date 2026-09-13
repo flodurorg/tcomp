@@ -13,6 +13,13 @@ pub fn size() -> (u16, u16) {
 
 pub fn restore() {
     if RAW_ACTIVE.swap(false, Ordering::SeqCst) {
+        use std::io::Write;
+        let cleanup = crate::modes::cleanup();
+        let mut stdout = std::io::stdout();
+        if !cleanup.is_empty() {
+            let _ = stdout.write_all(&cleanup);
+            let _ = stdout.flush();
+        }
         let _ = crossterm::terminal::disable_raw_mode();
     }
 }
