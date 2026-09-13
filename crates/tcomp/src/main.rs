@@ -15,14 +15,17 @@ use tokio::sync::mpsc::UnboundedSender;
 #[command(
     name = "tcomp",
     about = "terminal companion — share a terminal session in the browser",
-    // Allow `tcomp -- bash` as shorthand for standalone mode
     args_conflicts_with_subcommands = true,
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
 
-    // Bare `tcomp [opts] -- <cmd>` → standalone mode
+    // Bare `tcomp [opts] -- <cmd>` → remote relay mode
+    /// Relay base URL, e.g. https://tcomp.example.com
+    #[arg(long, env = "TCOMP_RELAY")]
+    relay: Option<String>,
+
     #[arg(long, env = "TCOMP_NAME", global = true)]
     name: Option<String>,
 
@@ -42,11 +45,17 @@ enum Cmd {
     /// Run the relay server (used by Docker)
     Serve,
 
-    /// Connect a command to an existing relay
-    Run {
-        /// Relay base URL, e.g. https://tcomp.example.com
-        #[arg(long, env = "TCOMP_RELAY")]
-        relay: String,
+    /// Start an embedded relay and run a command, printing the watch URL
+    Standalone {
+        #[arg(long, env = "TCOMP_NAME")]
+        name: Option<String>,
+
+        #[arg(long, env = "TCOMP_TOKEN")]
+        token: Option<String>,
+
+        /// Let the web view type into this terminal
+        #[arg(long, env = "TCOMP_ALLOW_INPUT")]
+        allow_input: bool,
 
         #[arg(last = true, required = true)]
         cmd: Vec<String>,
@@ -70,13 +79,13 @@ fn main() -> Result<()> {
             runtime.block_on(run_serve())?;
             Ok(())
         }
-        Some(Cmd::Run { relay, cmd }) => {
+        Some(Cmd::Standalone { name, token, allow_input, cmd }) => {
             let code = runtime.block_on(run_pty(
                 cmd,
-                PtyMode::Remote { relay },
-                cli.name,
-                cli.token,
-                cli.allow_input,
+                PtyMode::Standalone,
+                name,
+                token,
+                allow_input,
             ))?;
             term::restore();
             std::process::exit(code);
@@ -84,12 +93,18 @@ fn main() -> Result<()> {
         None => {
             if cli.cmd.is_empty() {
                 eprintln!("usage: tcomp [--relay URL] -- <command> [args...]");
+                eprintln!("       tcomp standalone -- <command> [args...]");
                 eprintln!("       tcomp serve");
                 std::process::exit(1);
             }
+            let relay = cli.relay.or_else(|| std::env::var("TCOMP_RELAY").ok().filter(|s| !s.is_empty()));
+            let Some(relay) = relay else {
+                eprintln!("tcomp: --relay or TCOMP_RELAY required (or use `tcomp standalone`)");
+                std::process::exit(1);
+            };
             let code = runtime.block_on(run_pty(
                 cli.cmd,
-                PtyMode::Standalone,
+                PtyMode::Remote { relay },
                 cli.name,
                 cli.token,
                 cli.allow_input,
