@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>tcomp</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">tcomp <span>terminal companion</span></div>
+  <div class="spacer"></div>
+  <div class="count" id="count"></div>
+</header>
+<main id="grid" class="grid"></main>
+<template id="empty">
+  <div class="empty">
+    <div>No sessions yet.</div>
+    <code>tcomp --relay RELAY_URL -- claude</code>
+  </div>
+</template>
+<script>
+const grid = document.getElementById('grid');
+const count = document.getElementById('count');
+const emptyTpl = document.getElementById('empty');
+
+function duration(seconds) {
+  if (seconds == null) return '';
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+function ago(unixSeconds) {
+  return duration(Date.now() / 1000 - unixSeconds) + ' ago';
+}
+
+function label(session) {
+  if (session.status === 'live') return 'live';
+  if (session.status === 'ended') return 'finished';
+  return 'disconnected';
+}
+
+function card(session) {
+  const a = document.createElement('a');
+  a.className = `window ${session.status}`;
+  a.href = `/s/${session.id}`;
+
+  const expiry = session.expires_in != null ? `expires in ${duration(session.expires_in)}` : '';
+  const preview = session.preview || '';
+
+  a.innerHTML = `
+    <div class="titlebar">
+      <div class="dots"><i class="dot a"></i><i class="dot b"></i><i class="dot c"></i></div>
+      <div class="title"><b></b><em></em></div>
+      <div class="badge ${session.status}"></div>
+    </div>
+    <pre class="preview"></pre>
+    <div class="meta"><span></span><span class="spacer"></span><span></span></div>`;
+
+  a.querySelector('.title b').textContent = session.name;
+  a.querySelector('.title em').textContent = session.cmd;
+  a.querySelector('.badge').textContent = label(session);
+  a.querySelector('.preview').textContent = preview;
+  const meta = a.querySelectorAll('.meta span');
+  meta[0].textContent = `${session.cols}×${session.rows} · ${ago(session.updated_at)}`;
+  meta[2].textContent = expiry;
+  return a;
+}
+
+function render(sessions) {
+  count.textContent = sessions.length
+    ? `${sessions.filter(s => s.status === 'live').length} live · ${sessions.length} total`
+    : '';
+  grid.replaceChildren();
+  if (!sessions.length) {
+    grid.append(emptyTpl.content.cloneNode(true));
+    return;
+  }
+  for (const session of sessions) grid.append(card(session));
+}
+
+async function poll() {
+  try {
+    const response = await fetch('/api/sessions', { cache: 'no-store' });
+    if (response.ok) render(await response.json());
+  } catch (_) {}
+  setTimeout(poll, 2000);
+}
+
+poll();
+</script>
+</body>
+</html>

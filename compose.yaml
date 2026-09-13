@@ -1,0 +1,27 @@
+services:
+  relay:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      TCOMP_BIND: 0.0.0.0:8080
+      TCOMP_PUBLIC_URL: ${TCOMP_PUBLIC_URL:-http://localhost:8080}
+      TCOMP_ENDED_TTL: ${TCOMP_ENDED_TTL:-60}
+      TCOMP_STALE_TTL: ${TCOMP_STALE_TTL:-14400}
+      RUST_LOG: ${RUST_LOG:-tcomp_relay=info}
+    develop:
+      watch:
+        - action: sync
+          path: ./web
+          target: /app/web
+        - action: rebuild
+          path: ./crates
+        - action: rebuild
+          path: ./Cargo.toml
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q 200"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped

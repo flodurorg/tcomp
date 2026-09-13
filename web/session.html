@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>tcomp session</title>
+<link rel="stylesheet" href="/static/xterm.css">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  .back { color: var(--muted); font-size: 20px; line-height: 1; padding: 0 4px; }
+  .back:hover { color: var(--text); }
+  .size { color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+
+  .notice {
+    display: none;
+    padding: 8px 18px;
+    background: #232b38;
+    border-bottom: 1px solid var(--edge);
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .notice.show { display: block; }
+
+  #stage {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    padding: 10px;
+    background: #05070b;
+  }
+
+  #host { transform-origin: top left; }
+  body.frozen #host { filter: grayscale(.85) brightness(.82); }
+  .xterm .xterm-viewport { overflow-y: auto; }
+
+  @media (max-width: 560px) {
+    .topbar { padding: 10px 12px; gap: 8px; }
+    .size { display: none; }
+    #stage { padding: 4px; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="back" href="/" title="All sessions">‹</a>
+  <div class="title"><b id="name">…</b><em id="cmd"></em></div>
+  <div class="spacer"></div>
+  <div class="size" id="size"></div>
+  <div class="badge" id="badge"></div>
+</header>
+<div class="notice" id="notice"></div>
+<main id="stage"><div id="host"></div></main>
+
+<script src="/static/xterm.js"></script>
+<script>
+const id = location.pathname.split('/').filter(Boolean).pop();
+const stage = document.getElementById('stage');
+const host = document.getElementById('host');
+const badge = document.getElementById('badge');
+const notice = document.getElementById('notice');
+const BASE_FONT = 15;
+const MAX_SCALE = 3;
+const PAD = 10;
+
+let term = null;
+let cols = 80;
+let rows = 24;
+let tries = 0;
+let backoff = 500;
+
+function ensureTerminal() {
+  if (term) return;
+  term = new Terminal({
+    cols, rows,
+    fontSize: BASE_FONT,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    scrollback: 5000,
+    disableStdin: true,
+    cursorBlink: false,
+    theme: { background: '#05070b', foreground: '#dbe3ef' },
+  });
+  term.open(host);
+  term.onRender(scheduleFit);
+  scheduleFit();
+}
+
+function screenEl() {
+  return host.querySelector('.xterm-screen');
+}
+
+function scheduleFit() {
+  tries = 0;
+  requestAnimationFrame(refit);
+}
+
+function refit() {
+  if (!term) return;
+  const el = screenEl();
+  if (!el || !el.offsetWidth) {
+    if (tries++ < 20) requestAnimationFrame(refit);
+    return;
+  }
+
+  const width = el.offsetWidth;
+  const height = el.offsetHeight;
+  if (!width || !height) return;
+
+  const chrome = document.querySelector('.topbar').offsetHeight
+    + (notice.classList.contains('show') ? notice.offsetHeight : 0);
+  const availW = Math.max(60, document.documentElement.clientWidth - PAD);
+  const availH = Math.max(60, document.documentElement.clientHeight - chrome - PAD);
+  const scale = Math.min(availW / width, availH / height, MAX_SCALE);
+
+  host.style.transformOrigin = 'top left';
+  host.style.transform = `scale(${scale})`;
+  host.style.width = `${width * scale}px`;
+  host.style.height = `${height * scale}px`;
+  document.getElementById('size').textContent = `${cols}\u00d7${rows}`;
+}
+
+function applyStatus(status, exitCode) {
+  badge.className = `badge ${status}`;
+  badge.textContent = status === 'live' ? 'live' : status === 'ended' ? 'finished' : 'disconnected';
+  document.body.classList.toggle('frozen', status !== 'live');
+  if (status === 'live') {
+    notice.classList.remove('show');
+    return;
+  }
+  notice.textContent = status === 'ended'
+    ? `Session ended${exitCode != null ? ` (exit ${exitCode})` : ''}. Showing final output.`
+    : 'Host disconnected. History only — this view will not update again.';
+  notice.classList.add('show');
+}
+
+function onControl(frame) {
+  if (frame.t === 'init') {
+    cols = frame.cols;
+    rows = frame.rows;
+    document.getElementById('name').textContent = frame.name;
+    document.getElementById('cmd').textContent = frame.cmd;
+    document.title = `${frame.name} — tcomp`;
+    ensureTerminal();
+    if (term.cols !== cols || term.rows !== rows) {
+      term.resize(cols, rows);
+    }
+    scheduleFit();
+    applyStatus(frame.status);
+  } else if (frame.t === 'resize') {
+    cols = frame.cols;
+    rows = frame.rows;
+    ensureTerminal();
+    term.resize(cols, rows);
+    scheduleFit();
+  } else if (frame.t === 'status') {
+    applyStatus(frame.status);
+  } else if (frame.t === 'exit') {
+    applyStatus('ended', frame.code);
+  }
+}
+
+function connect() {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${scheme}://${location.host}/ws/view/${id}`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onmessage = (event) => {
+    if (typeof event.data === 'string') {
+      try { onControl(JSON.parse(event.data)); } catch (_) {}
+    } else {
+      ensureTerminal();
+      term.write(new Uint8Array(event.data));
+    }
+  };
+  ws.onopen = () => { backoff = 500; };
+  ws.onclose = () => {
+    setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 15000);
+  };
+  ws.onerror = () => ws.close();
+}
+
+let pending = null;
+addEventListener('resize', () => {
+  clearTimeout(pending);
+  pending = setTimeout(scheduleFit, 120);
+});
+
+connect();
+</script>
+</body>
+</html>

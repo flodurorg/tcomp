@@ -1,0 +1,22 @@
+[package]
+name = "tcomp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tcomp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+crossterm = "0.29"
+portable-pty = "0.9"
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3.34"
+bytes = "1.12.1"
