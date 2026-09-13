@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
+use tokio::sync::mpsc::UnboundedSender;
 
 const BROADCAST_CAPACITY: usize = 2048;
 const MAX_COLS: u16 = 1000;
@@ -41,6 +42,8 @@ struct State {
     history_cap: usize,
     carry: Vec<u8>,
     epoch: u64,
+    allow_input: bool,
+    input: Option<UnboundedSender<Bytes>>,
 }
 
 pub struct Join {
@@ -62,6 +65,7 @@ impl Session {
         cmd: String,
         cols: u16,
         rows: u16,
+        allow_input: bool,
         config: &Config,
     ) -> Self {
         let (cols, rows) = clamp_size(cols, rows);
@@ -89,6 +93,8 @@ impl Session {
                 history_cap: config.history_bytes,
                 carry: Vec::new(),
                 epoch: 0,
+                allow_input,
+                input: None,
             }),
         }
     }
@@ -140,6 +146,7 @@ impl Session {
             status: state.status,
             name: state.name.clone(),
             cmd: state.cmd.clone(),
+            input: state.allow_input,
         };
         let payload = if state.status == Status::Live || state.history.is_empty() {
             vec![dump_bytes(&state.vt)]
@@ -161,6 +168,7 @@ impl Session {
     pub fn mark_exit(&self, code: i32) {
         let mut state = self.lock();
         state.status = Status::Ended;
+        state.input = None;
         state.exit_code = Some(code);
         state.terminal_at = Some(SystemTime::now());
         state.updated_at = SystemTime::now();
@@ -174,6 +182,7 @@ impl Session {
         if state.epoch != epoch || state.status != Status::Live {
             return;
         }
+        state.input = None;
         state.status = Status::Stale;
         state.terminal_at = Some(SystemTime::now());
         let _ = self.tx.send(Frame::Ctrl(proto::Server::Status {
@@ -181,9 +190,11 @@ impl Session {
         }));
     }
 
-    pub fn resume(&self, cols: u16, rows: u16) -> u64 {
+    pub fn resume(&self, cols: u16, rows: u16, allow_input: bool) -> u64 {
         let mut state = self.lock();
         state.epoch += 1;
+        state.allow_input = allow_input;
+        state.input = None;
         state.status = Status::Live;
         state.terminal_at = None;
         state.exit_code = None;
@@ -196,6 +207,35 @@ impl Session {
         }));
         self.resize(cols, rows);
         epoch
+    }
+
+    pub fn allows_input(&self) -> bool {
+        self.lock().allow_input
+    }
+
+    pub fn attach_input(&self, epoch: u64, tx: UnboundedSender<Bytes>) {
+        let mut state = self.lock();
+        if state.epoch == epoch {
+            state.input = Some(tx);
+        }
+    }
+
+    pub fn detach_input(&self, epoch: u64) {
+        let mut state = self.lock();
+        if state.epoch == epoch {
+            state.input = None;
+        }
+    }
+
+    pub fn send_input(&self, bytes: Bytes) -> bool {
+        let state = self.lock();
+        if !state.allow_input || state.status != Status::Live {
+            return false;
+        }
+        match state.input.as_ref() {
+            Some(tx) => tx.send(bytes).is_ok(),
+            None => false,
+        }
     }
 
     pub fn epoch(&self) -> u64 {
@@ -227,6 +267,7 @@ impl Session {
             cols: state.cols,
             rows: state.rows,
             status: state.status,
+            input: state.allow_input,
             started_at: unix(state.started_at),
             updated_at: unix(state.updated_at),
             expires_in,
@@ -358,7 +399,15 @@ mod tests {
     }
 
     fn session() -> Session {
-        Session::new("s1".into(), "box".into(), "sh".into(), 20, 5, &config())
+        Session::new(
+            "s1".into(),
+            "box".into(),
+            "sh".into(),
+            20,
+            5,
+            false,
+            &config(),
+        )
     }
 
     fn screen(session: &Session) -> String {
@@ -413,7 +462,15 @@ mod tests {
 
     #[test]
     fn session_survives_zero_rows_from_producer() {
-        let session = Session::new("z".into(), "box".into(), "sh".into(), 0, 0, &config());
+        let session = Session::new(
+            "z".into(),
+            "box".into(),
+            "sh".into(),
+            0,
+            0,
+            false,
+            &config(),
+        );
         session.feed(Bytes::from_static(b"hi"));
         session.resize(0, 0);
         assert_eq!(session.status(), Status::Live);
@@ -479,7 +536,7 @@ mod tests {
         session.mark_disconnected(session.epoch());
         assert_eq!(session.status(), Status::Stale);
 
-        let epoch = session.resume(20, 5);
+        let epoch = session.resume(20, 5, false);
         assert_eq!(session.status(), Status::Live);
         assert!(screen(&session).contains("before"));
 
@@ -546,6 +603,87 @@ mod tests {
         );
     }
 
+    fn interactive() -> Session {
+        Session::new(
+            "i1".into(),
+            "box".into(),
+            "sh".into(),
+            20,
+            5,
+            true,
+            &config(),
+        )
+    }
+
+    #[test]
+    fn input_is_refused_unless_the_host_opted_in() {
+        let session = session();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        session.attach_input(session.epoch(), tx);
+
+        assert!(!session.send_input(Bytes::from_static(b"rm -rf /")));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn input_reaches_an_attached_producer_when_allowed() {
+        let session = interactive();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        session.attach_input(session.epoch(), tx);
+
+        assert!(session.send_input(Bytes::from_static(b"ls\r")));
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"ls\r"));
+    }
+
+    #[test]
+    fn input_is_dropped_once_the_producer_is_gone() {
+        let session = interactive();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let epoch = session.epoch();
+        session.attach_input(epoch, tx);
+
+        session.mark_disconnected(epoch);
+        assert!(!session.send_input(Bytes::from_static(b"whoami")));
+
+        let ended = interactive();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        ended.attach_input(ended.epoch(), tx);
+        ended.mark_exit(0);
+        assert!(!ended.send_input(Bytes::from_static(b"whoami")));
+    }
+
+    #[test]
+    fn a_stale_producers_input_channel_does_not_outlive_a_resume() {
+        let session = interactive();
+        let (old_tx, mut old_rx) = tokio::sync::mpsc::unbounded_channel();
+        let old_epoch = session.epoch();
+        session.attach_input(old_epoch, old_tx);
+        session.mark_disconnected(old_epoch);
+
+        let new_epoch = session.resume(20, 5, true);
+        session.attach_input(old_epoch, tokio::sync::mpsc::unbounded_channel().0);
+        assert!(!session.send_input(Bytes::from_static(b"stale")));
+
+        let (new_tx, mut new_rx) = tokio::sync::mpsc::unbounded_channel();
+        session.attach_input(new_epoch, new_tx);
+        assert!(session.send_input(Bytes::from_static(b"fresh")));
+        assert_eq!(new_rx.try_recv().unwrap(), Bytes::from_static(b"fresh"));
+        assert!(old_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn resume_can_revoke_input() {
+        let session = interactive();
+        assert!(session.allows_input());
+        session.mark_disconnected(session.epoch());
+
+        let epoch = session.resume(20, 5, false);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        session.attach_input(epoch, tx);
+        assert!(!session.allows_input());
+        assert!(!session.send_input(Bytes::from_static(b"nope")));
+    }
+
     #[test]
     fn reaper_removes_expired_sessions_only() {
         let mut config = config();
@@ -559,6 +697,7 @@ mod tests {
             "sh".into(),
             20,
             5,
+            false,
             &config,
         ));
         gone.mark_exit(0);

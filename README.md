@@ -14,14 +14,20 @@ relay, so it works behind NAT, on a customer network, or on someone else's VPN.
 
 ## Security
 
-v1 has **no authentication**. Anyone with a session URL — and anyone who can
-reach the relay, since the home page lists sessions — sees everything the
-terminal prints, including whatever your command echoes: file contents, tokens,
-keys. Session IDs are 128-bit random, but that is not a substitute for auth.
+There is **no authentication**. The home page lists every session, so anyone who
+can reach the relay sees everything your terminal prints — file contents, tokens,
+keys, whatever the command echoes. Session IDs are 128-bit random, but with an
+index page that is not a control.
+
+`--allow-input` raises that from disclosure to **arbitrary code execution**:
+anyone who can reach the relay can type into that terminal as you. It is off by
+default and decided by the host, never by the relay or the browser. Do not use it
+on a relay that is reachable by anyone you would not hand a shell.
 
 Run the relay somewhere private, or put an authenticating proxy in front of it,
 until auth lands. `crates/tcomp-relay/src/auth.rs` is the single seam: it is
-called on the index, on `/s/<id>` and on `/ws/produce`.
+called on the index, on `/s/<id>`, on `/ws/produce`, and separately for write
+access, so read-only and read-write can be gated independently.
 
 ## Layout
 
@@ -70,6 +76,7 @@ tcomp [--relay URL] [--name NAME] [--token TOKEN] [--local] -- <command>...
 | `--name` | `TCOMP_NAME` | label in the web UI (default: hostname) |
 | `--token` | `TCOMP_TOKEN` | sent in the hello frame; ignored in v1 |
 | `--local` | | never connect, even if `--relay` is set |
+| `--allow-input` | | let the web view type into this terminal (see Security) |
 
 The child's exit code is the wrapper's exit code. If the connection drops the
 client reconnects with exponential backoff and resumes the same session.
@@ -93,6 +100,7 @@ TLS is expected to terminate in a reverse proxy in front of the relay.
 | State | When | In the UI |
 | --- | --- | --- |
 | live | producer connected | coloured, streaming |
+| interactive | producer connected, started with `--allow-input` | as live, plus the browser can type |
 | finished | command exited, relay told | kept `TCOMP_ENDED_TTL`, then dropped |
 | disconnected | producer vanished without saying goodbye | greyed out, still clickable, history only, kept `TCOMP_STALE_TTL` |
 
@@ -105,4 +113,12 @@ shows that terminal alone at the host's exact dimensions, scaled to fit the
 viewport — the grid is never reflowed, so what you see matches the host
 character for character. Works on a phone.
 
-The browser never sends input. The viewer socket ignores anything it receives.
+Without `--allow-input` the browser never sends input, and the viewer socket
+discards anything it receives.
+
+With `--allow-input` the terminal takes keystrokes and forwards them to the pty.
+A key bar supplies esc, tab, ^C, ^D, ^Z and arrows, which phone keyboards lack.
+Every viewer of that session can type — there is no writer lock, so two people
+typing at once interleave their bytes. Input is refused once a session stops
+being live, so a disconnected session cannot be typed into while it waits out its
+TTL. The browser still cannot resize the host.

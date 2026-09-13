@@ -38,6 +38,28 @@
   body.frozen #host { filter: grayscale(.85) brightness(.82); }
   .xterm .xterm-viewport { overflow-y: auto; }
 
+  .keybar {
+    display: none;
+    gap: 6px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--edge);
+    background: var(--panel);
+    overflow-x: auto;
+  }
+  .keybar.show { display: flex; }
+  .keybar button {
+    flex: none;
+    min-width: 44px;
+    padding: 9px 12px;
+    border: 1px solid var(--edge);
+    border-radius: 7px;
+    background: var(--panel-2);
+    color: var(--text);
+    font: 13px/1 ui-monospace, Menlo, monospace;
+    cursor: pointer;
+  }
+  .keybar button:active { background: #2b3849; }
+
   @media (max-width: 560px) {
     .topbar { padding: 10px 12px; gap: 8px; }
     .size { display: none; }
@@ -55,6 +77,17 @@
 </header>
 <div class="notice" id="notice"></div>
 <main id="stage"><div id="host"></div></main>
+<nav class="keybar" id="keybar">
+  <button data-seq="\x1b">esc</button>
+  <button data-seq="\t">tab</button>
+  <button data-seq="\x03">^C</button>
+  <button data-seq="\x04">^D</button>
+  <button data-seq="\x1a">^Z</button>
+  <button data-seq="\x1b[D">←</button>
+  <button data-seq="\x1b[B">↓</button>
+  <button data-seq="\x1b[A">↑</button>
+  <button data-seq="\x1b[C">→</button>
+</nav>
 
 <script src="/static/xterm.js"></script>
 <script>
@@ -68,10 +101,15 @@ const MAX_SCALE = 3;
 const PAD = 10;
 
 let term = null;
+let socket = null;
 let cols = 80;
 let rows = 24;
 let tries = 0;
 let backoff = 500;
+let allowInput = false;
+let status = 'live';
+const encoder = new TextEncoder();
+const keybar = document.getElementById('keybar');
 
 function ensureTerminal() {
   if (term) return;
@@ -86,6 +124,24 @@ function ensureTerminal() {
   });
   term.open(host);
   term.onRender(scheduleFit);
+  term.onData(send);
+  scheduleFit();
+}
+
+function send(data) {
+  if (!allowInput || status !== 'live' || !data) return;
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(encoder.encode(data));
+  }
+}
+
+function applyInput(enabled) {
+  allowInput = enabled;
+  keybar.classList.toggle('show', enabled && status === 'live');
+  if (term) {
+    term.options.disableStdin = !(enabled && status === 'live');
+    if (enabled && status === 'live') term.focus();
+  }
   scheduleFit();
 }
 
@@ -111,7 +167,8 @@ function refit() {
   if (!width || !height) return;
 
   const chrome = document.querySelector('.topbar').offsetHeight
-    + (notice.classList.contains('show') ? notice.offsetHeight : 0);
+    + (notice.classList.contains('show') ? notice.offsetHeight : 0)
+    + (keybar.classList.contains('show') ? keybar.offsetHeight : 0);
   const availW = Math.max(60, document.documentElement.clientWidth - PAD);
   const availH = Math.max(60, document.documentElement.clientHeight - chrome - PAD);
   const scale = Math.min(availW / width, availH / height, MAX_SCALE);
@@ -123,10 +180,14 @@ function refit() {
   document.getElementById('size').textContent = `${cols}\u00d7${rows}`;
 }
 
-function applyStatus(status, exitCode) {
+function applyStatus(next, exitCode) {
+  status = next;
   badge.className = `badge ${status}`;
-  badge.textContent = status === 'live' ? 'live' : status === 'ended' ? 'finished' : 'disconnected';
+  badge.textContent = status === 'live'
+    ? (allowInput ? 'interactive' : 'live')
+    : status === 'ended' ? 'finished' : 'disconnected';
   document.body.classList.toggle('frozen', status !== 'live');
+  applyInput(allowInput);
   if (status === 'live') {
     notice.classList.remove('show');
     return;
@@ -149,6 +210,7 @@ function onControl(frame) {
       term.resize(cols, rows);
     }
     scheduleFit();
+    allowInput = !!frame.input;
     applyStatus(frame.status);
   } else if (frame.t === 'resize') {
     cols = frame.cols;
@@ -176,6 +238,7 @@ function connect() {
       term.write(new Uint8Array(event.data));
     }
   };
+  socket = ws;
   ws.onopen = () => { backoff = 500; };
   ws.onclose = () => {
     setTimeout(connect, backoff);
@@ -183,6 +246,17 @@ function connect() {
   };
   ws.onerror = () => ws.close();
 }
+
+keybar.addEventListener('click', (event) => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  send(JSON.parse(`"${button.dataset.seq}"`));
+  if (term) term.focus();
+});
+
+stage.addEventListener('click', () => {
+  if (allowInput && status === 'live' && term) term.focus();
+});
 
 let pending = null;
 addEventListener('resize', () => {

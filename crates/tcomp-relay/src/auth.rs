@@ -15,6 +15,7 @@ pub enum Access<'a> {
     Index,
     Produce { token: Option<&'a str> },
     View { session: &'a str },
+    Write { session: &'a str },
 }
 
 pub async fn authorize(

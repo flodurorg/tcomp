@@ -11,6 +11,8 @@ pub struct Hello {
     pub cmd: String,
     pub cols: u16,
     pub rows: u16,
+    #[serde(default)]
+    pub input: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
 }
@@ -51,6 +53,7 @@ pub enum Server {
         status: Status,
         name: String,
         cmd: String,
+        input: bool,
     },
     Resize {
         cols: u16,
@@ -72,6 +75,7 @@ pub struct SessionInfo {
     pub cols: u16,
     pub rows: u16,
     pub status: Status,
+    pub input: bool,
     pub started_at: u64,
     pub updated_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -39,7 +39,7 @@ function ago(unixSeconds) {
 }
 
 function label(session) {
-  if (session.status === 'live') return 'live';
+  if (session.status === 'live') return session.input ? 'interactive' : 'live';
   if (session.status === 'ended') return 'finished';
   return 'disconnected';
 }
@@ -66,7 +66,8 @@ function card(session) {
   a.querySelector('.badge').textContent = label(session);
   a.querySelector('.preview').textContent = preview;
   const meta = a.querySelectorAll('.meta span');
-  meta[0].textContent = `${session.cols}×${session.rows} · ${ago(session.updated_at)}`;
+  meta[0].textContent = `${session.cols}×${session.rows} · ${ago(session.updated_at)}`
+    + (session.input ? ' · input' : '');
   meta[2].textContent = expiry;
   return a;
 }

@@ -16,6 +16,7 @@ pub struct Params {
     pub token: Option<String>,
     pub cols: u16,
     pub rows: u16,
+    pub input: bool,
 }
 
 pub fn produce_url(base: &str) -> Result<String> {
@@ -31,7 +32,11 @@ pub fn produce_url(base: &str) -> Result<String> {
     Ok(format!("{url}/ws/produce"))
 }
 
-pub async fn run(params: Params, mut events: UnboundedReceiver<Event>) {
+pub async fn run(
+    params: Params,
+    mut events: UnboundedReceiver<Event>,
+    writes: Option<std::sync::mpsc::Sender<Vec<u8>>>,
+) {
     let url = match produce_url(&params.relay) {
         Ok(url) => url,
         Err(error) => {
@@ -54,7 +59,15 @@ pub async fn run(params: Params, mut events: UnboundedReceiver<Event>) {
                 }
                 session = Some(ack.session);
                 backoff = BACKOFF_MIN;
-                match pump(&mut socket, &mut events, &mut cols, &mut rows).await {
+                match pump(
+                    &mut socket,
+                    &mut events,
+                    &mut cols,
+                    &mut rows,
+                    writes.as_ref(),
+                )
+                .await
+                {
                     Outcome::Finished => {
                         let _ = socket.close(None).await;
                         return;
@@ -95,6 +108,7 @@ async fn connect(
         cmd: params.cmd.clone(),
         cols,
         rows,
+        input: params.input,
         resume: session.clone(),
     };
     socket
@@ -117,6 +131,7 @@ async fn pump(
     events: &mut UnboundedReceiver<Event>,
     cols: &mut u16,
     rows: &mut u16,
+    writes: Option<&std::sync::mpsc::Sender<Vec<u8>>>,
 ) -> Outcome {
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.tick().await;
@@ -127,6 +142,14 @@ async fn pump(
             incoming = socket.next() => match incoming {
                 Some(Ok(Message::Close(_))) | None => return Outcome::Disconnected,
                 Some(Err(_)) => return Outcome::Disconnected,
+                Some(Ok(Message::Binary(bytes))) => {
+                    if let Some(writes) = writes {
+                        if !bytes.is_empty() && writes.send(bytes.to_vec()).is_err() {
+                            return Outcome::Finished;
+                        }
+                    }
+                    continue;
+                }
                 Some(Ok(_)) => continue,
             },
             event = events.recv() => match event {

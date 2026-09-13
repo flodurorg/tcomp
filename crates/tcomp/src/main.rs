@@ -31,6 +31,10 @@ struct Args {
     #[arg(long)]
     local: bool,
 
+    /// Let the web view type into this terminal
+    #[arg(long)]
+    allow_input: bool,
+
     #[arg(last = true, required = true)]
     command: Vec<String>,
 }
@@ -83,6 +87,7 @@ async fn run(args: Args) -> Result<i32> {
     let _raw = term::RawGuard::new()?;
 
     let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    let (writes_tx, writes_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let relay_url = if args.local { None } else { args.relay.clone() };
     let relay_tx = relay_url.as_ref().map(|_| events_tx.clone());
 
@@ -95,8 +100,10 @@ async fn run(args: Args) -> Result<i32> {
                 token: args.token.clone(),
                 cols,
                 rows,
+                input: args.allow_input,
             };
-            tokio::spawn(relay::run(params, events_rx))
+            let writes = args.allow_input.then_some(writes_tx.clone());
+            tokio::spawn(relay::run(params, events_rx, writes))
         }
         None => tokio::spawn(async move {
             let mut events_rx = events_rx;
@@ -104,8 +111,10 @@ async fn run(args: Args) -> Result<i32> {
         }),
     };
 
+    let stdin_tx = writes_tx.clone();
     let output_done = std::thread::spawn(move || pump_output(reader, relay_tx));
-    std::thread::spawn(move || pump_input(writer));
+    std::thread::spawn(move || pump_writes(writer, writes_rx));
+    std::thread::spawn(move || pump_stdin(stdin_tx));
 
     let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
     let killer = child.clone_killer();
@@ -183,21 +192,29 @@ fn pump_output(mut reader: Box<dyn Read + Send>, relay: Option<UnboundedSender<E
     }
 }
 
-fn pump_input(mut writer: Box<dyn Write + Send>) {
+fn pump_stdin(writes: std::sync::mpsc::Sender<Vec<u8>>) {
     let mut stdin = std::io::stdin();
     let mut buf = [0u8; 4096];
     loop {
         match stdin.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                if writer.write_all(&buf[..n]).is_err() {
+                if writes.send(buf[..n].to_vec()).is_err() {
                     break;
                 }
-                let _ = writer.flush();
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
+    }
+}
+
+fn pump_writes(mut writer: Box<dyn Write + Send>, writes: std::sync::mpsc::Receiver<Vec<u8>>) {
+    while let Ok(chunk) = writes.recv() {
+        if writer.write_all(&chunk).is_err() {
+            break;
+        }
+        let _ = writer.flush();
     }
 }
 
