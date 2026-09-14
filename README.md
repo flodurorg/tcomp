@@ -1,4 +1,4 @@
-# tcomp — terminal companion
+# tcomp — take your terminals on the go
 
 Run a command locally; watch it from a browser. Read-only by default, two-way
 with `--allow-input`.
