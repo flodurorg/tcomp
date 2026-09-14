@@ -4,9 +4,9 @@ tcomp {{ .Chart.AppVersion }} is installed as {{ include "tcomp.fullname" . }}.
 {{- if $url }}
 
 Watch sessions at {{ $url }}
-{{- else if .Values.ingress.enabled }}
+{{- else if or .Values.ingress.enabled .Values.httpRoute.enabled }}
 
-Ingress is enabled but no host resolved; set publicUrl so watch links are correct.
+A route is enabled but no host resolved; set publicUrl so watch links are correct.
 {{- else }}
 
 Reach it locally with:
@@ -20,6 +20,12 @@ then open http://localhost:8080 and set publicUrl before exposing it.
 
 WARNING: no token is set, so anyone who can reach this relay can watch every
 session. Set auth.token or auth.existingSecret.
+{{- end }}
+
+{{- if and .Values.ingress.enabled .Values.httpRoute.enabled }}
+
+WARNING: both ingress and httpRoute are enabled, so two routes point at this
+service. publicUrl is built from the ingress host.
 {{- end }}
 
 {{- if gt (int .Values.replicaCount) 1 }}

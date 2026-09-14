@@ -52,8 +52,26 @@ ingress:
           pathType: Prefix
   tls: []
 
+httpRoute:
+  enabled: false
+  apiVersion: gateway.networking.k8s.io/v1
+  annotations: {}
+  # Required when enabled, e.g. [{name: my-gateway, namespace: infra}].
+  parentRefs: []
+  hostnames: []
+  matches:
+    - path:
+        type: PathPrefix
+        value: /
+  filters: []
+  # Some implementations default to a request timeout that would cut the
+  # websocket; set request and backendRequest to 0s to disable it.
+  timeouts: {}
+  # Gateway listeners hold the TLS config, so the scheme cannot be inferred.
+  scheme: https
+
 # Absolute URL viewers reach, e.g. https://tcomp.example.com.
-# Derived from the first ingress host when left empty.
+# Derived from the first ingress host or httpRoute hostname when left empty.
 publicUrl: ""
 
 auth:

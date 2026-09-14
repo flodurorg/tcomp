@@ -60,9 +60,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "tcomp.publicUrl" -}}
 {{- if .Values.publicUrl }}
 {{- .Values.publicUrl | trimSuffix "/" }}
-{{- else if and .Values.ingress.enabled (first .Values.ingress.hosts) }}
+{{- else if and .Values.ingress.enabled .Values.ingress.hosts }}
 {{- $host := (first .Values.ingress.hosts).host }}
 {{- $scheme := ternary "https" "http" (not (empty .Values.ingress.tls)) }}
 {{- printf "%s://%s" $scheme $host }}
+{{- else if and .Values.httpRoute.enabled .Values.httpRoute.hostnames }}
+{{- printf "%s://%s" .Values.httpRoute.scheme (first .Values.httpRoute.hostnames) }}
 {{- end }}
 {{- end }}

@@ -89,8 +89,20 @@ helm install tcomp ./charts/tcomp \
   --set auth.token="$(openssl rand -hex 32)"
 ```
 
-`publicUrl` is derived from the first ingress host when left empty; set it
-explicitly when a proxy sits in front.
+Gateway API works instead of an Ingress, and the two are independent:
+
+```sh
+helm install tcomp ./charts/tcomp \
+  --set httpRoute.enabled=true \
+  --set httpRoute.parentRefs[0].name=my-gateway \
+  --set httpRoute.hostnames[0]=tcomp.example.com \
+  --set auth.token="$(openssl rand -hex 32)"
+```
+
+`publicUrl` is derived from the first ingress host or `httpRoute` hostname when
+left empty; set it explicitly when a proxy sits in front. Some Gateway
+implementations apply a default request timeout that would cut the websocket;
+set `httpRoute.timeouts.request=0s` if viewers drop.
 
 ## Parameters
 
