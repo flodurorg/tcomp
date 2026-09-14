@@ -152,7 +152,13 @@
     outline: 2px solid var(--ended);
     outline-offset: 2px;
   }
-  .keybar .combo { min-width: 70px; }
+  .keybar button[aria-pressed="true"] {
+    border-color: var(--ended);
+    background: linear-gradient(180deg, #31547e, #263f61);
+    box-shadow: 0 2px 0 #13243a, 0 0 0 1px rgba(91, 157, 255, .2);
+    color: #fff;
+  }
+  .keybar .modifier, .keybar .combo { min-width: 70px; }
   .key-mod {
     color: #9aa9bd;
     font-size: 10px;
@@ -185,9 +191,9 @@
 <main id="stage"><div id="host"></div></main>
 <nav class="keybar" id="keybar" aria-label="Terminal keys" aria-hidden="true">
   <div class="key-group">
+    <button class="modifier" type="button" data-modifier="shift" aria-pressed="false">Shift</button>
     <button type="button" data-key="escape" aria-label="Escape">Esc</button>
     <button type="button" data-key="tab">Tab</button>
-    <button class="combo" type="button" data-key="shiftTab" aria-label="Shift Tab"><span class="key-mod">Shift</span>Tab</button>
   </div>
   <div class="key-group">
     <button class="combo" type="button" data-key="ctrlC" aria-label="Control C"><span class="key-mod">Ctrl</span>C</button>
@@ -238,7 +244,6 @@ const KEYBAR_KEY = 'tcomp.terminal-keys';
 const keySequences = {
   escape: '\x1b',
   tab: '\t',
-  shiftTab: '\x1b[Z',
   ctrlC: '\x03',
   ctrlD: '\x04',
   ctrlZ: '\x1a',
@@ -279,9 +284,11 @@ let sessionCmd = '';
 let sessionTitle = '';
 let sessionCwd = '';
 let keybarOpen = loadKeybarPreference();
+let shiftActive = false;
 const encoder = new TextEncoder();
 const keybar = document.getElementById('keybar');
 const keyboardToggle = document.getElementById('keyboard-toggle');
+const shiftKey = keybar.querySelector('[data-modifier="shift"]');
 
 function loadKeybarPreference() {
   try {
@@ -320,6 +327,17 @@ function send(data) {
   }
 }
 
+function setShift(active) {
+  shiftActive = active;
+  shiftKey.setAttribute('aria-pressed', String(active));
+}
+
+function shifted(sequence) {
+  if (sequence === '\t') return '\x1b[Z';
+  if (sequence >= 'a' && sequence <= 'z') return sequence.toUpperCase();
+  return sequence;
+}
+
 function applyInput(enabled) {
   allowInput = enabled;
   const active = enabled && status === 'live';
@@ -330,6 +348,7 @@ function applyInput(enabled) {
   keyboardToggle.setAttribute('aria-expanded', String(open));
   keyboardToggle.setAttribute('aria-label', keybarOpen ? 'Hide terminal keys' : 'Show terminal keys');
   keyboardToggle.title = keybarOpen ? 'Hide terminal keys' : 'Show terminal keys';
+  if (!open) setShift(false);
   if (term) {
     term.options.disableStdin = !active;
     if (active) term.focus();
@@ -485,7 +504,13 @@ function connect() {
 keybar.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
-  send(keySequences[button.dataset.key]);
+  if (button.dataset.modifier === 'shift') {
+    setShift(!shiftActive);
+    return;
+  }
+  const sequence = keySequences[button.dataset.key];
+  send(shiftActive ? shifted(sequence) : sequence);
+  setShift(false);
   if (term) term.focus();
 });
 
