@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="same-origin">
+<title>tcomp — sign in</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  main {
+    position: relative;
+    z-index: 1;
+    min-height: calc(100vh - var(--topbar-h));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  form {
+    width: 100%;
+    max-width: 340px;
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 12px;
+    padding: 22px;
+  }
+  h1 { margin: 0 0 6px; font-size: 16px; font-weight: 650; }
+  p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+  input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    background: var(--panel-2);
+    color: var(--text);
+    font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  input:focus { outline: none; border-color: var(--ended); }
+  button {
+    width: 100%;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    background: var(--panel-2);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { background: var(--edge); }
+  .bad {
+    display: none;
+    margin: 0 0 14px;
+    color: #ff8b8b;
+    font-size: 13px;
+  }
+  .bad.show { display: block; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">tcomp <span>terminal companion</span></div>
+</header>
+<main>
+  <form method="post" action="/login">
+    <h1>This relay is private</h1>
+    <p>Enter the token the host started it with.</p>
+    <p class="bad" id="bad">That token was not accepted.</p>
+    <input id="token" name="token" type="password" autocomplete="current-password"
+           autofocus required spellcheck="false" placeholder="token">
+    <input id="next" name="next" type="hidden" value="/">
+    <button type="submit">Continue</button>
+  </form>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+const next = params.get('next');
+document.getElementById('next').value =
+  next && next.startsWith('/') && !next.startsWith('//') ? next
+  : location.pathname === '/login' ? '/'
+  : location.pathname;
+if (params.has('bad')) document.getElementById('bad').classList.add('show');
+</script>
+</body>
+</html>

@@ -9,9 +9,8 @@ pub struct Config {
     pub stale_ttl: Duration,
     pub scrollback: usize,
     pub history_bytes: usize,
-    /// Reserved for the auth seam; see auth.rs.
-    #[allow(dead_code)]
     pub token: Option<String>,
+    pub token_in_links: bool,
 }
 
 impl Config {
@@ -25,11 +24,15 @@ impl Config {
             scrollback: env_num("TCOMP_SCROLLBACK", 2000) as usize,
             history_bytes: env_num("TCOMP_HISTORY_BYTES", 512 * 1024) as usize,
             token: std::env::var("TCOMP_TOKEN").ok().filter(|t| !t.is_empty()),
+            token_in_links: false,
         }
     }
 
     pub fn session_url(&self, id: &str) -> String {
-        format!("{}/s/{}", self.public_url, id)
+        match self.token.as_deref().filter(|_| self.token_in_links) {
+            Some(token) => format!("{}/s/{}?token={}", self.public_url, id, token),
+            None => format!("{}/s/{}", self.public_url, id),
+        }
     }
 }
 
@@ -49,4 +52,38 @@ fn env_num(key: &str, default: u64) -> u64 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    fn config(token: Option<&str>, token_in_links: bool) -> Config {
+        Config {
+            public_url: "http://relay.test".into(),
+            token: token.map(str::to_string),
+            token_in_links,
+            ..Config::from_env()
+        }
+    }
+
+    #[test]
+    fn a_minted_token_rides_along_in_the_watch_link() {
+        assert_eq!(
+            config(Some("s3cret"), true).session_url("abc"),
+            "http://relay.test/s/abc?token=s3cret"
+        );
+    }
+
+    #[test]
+    fn a_shared_relay_never_prints_its_token() {
+        assert_eq!(
+            config(Some("s3cret"), false).session_url("abc"),
+            "http://relay.test/s/abc"
+        );
+        assert_eq!(
+            config(None, true).session_url("abc"),
+            "http://relay.test/s/abc"
+        );
+    }
 }

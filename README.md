@@ -25,7 +25,7 @@ tcomp --relay https://tcomp.example.com -- claude
 is what the Docker image runs.
 
 ```sh
-tcomp serve
+TCOMP_TOKEN=$(openssl rand -hex 16) tcomp serve
 ```
 
 **interactive** — let the browser type into the terminal instead of just
@@ -38,12 +38,26 @@ tcomp standalone --allow-input -- claude
 
 ## Security
 
-**There is no authentication.** Anyone who can reach the relay sees everything
-the command prints — file contents, tokens, keys. `--allow-input` raises that to
-**arbitrary code execution**: they can type into your terminal as you.
+**A relay is only as private as its token.** Anyone holding it sees everything
+the command prints — file contents, tokens, keys — and on an `--allow-input`
+session can type into your terminal as you.
 
-Run the relay somewhere private or behind an authenticating proxy.
-`crates/tcomp/src/server/auth.rs` is the single seam for adding auth.
+`tcomp standalone` mints a fresh token per run and carries it in the printed
+watch URL, so an embedded relay is never open — not even when you `--bind` it to
+a tailnet address. `tcomp serve` is **open until you set `TCOMP_TOKEN`**; set
+one, or keep the relay somewhere private or behind an authenticating proxy. It
+says so in the log on every start.
+
+Opening a `?token=…` link moves the token into an `HttpOnly`, `SameSite=Lax`
+cookie and redirects to the clean URL, so the secret leaves the address bar and
+never rides along in a `Referer`. Without a link you get a sign-in page instead.
+Scripts can send `Authorization: Bearer <token>`. Tokens must be URL-safe —
+letters, digits and `-._~` — and the relay refuses to start otherwise.
+`/healthz` and `/static` stay open.
+
+`crates/tcomp/src/server/auth.rs` is still the single seam, and what it
+implements is one shared token: access is all-or-nothing, with no per-session
+scope and no separate read-only credential.
 
 ## Deploying
 
@@ -73,6 +87,7 @@ Session flags, each with an environment equivalent:
 | `--relay` | `TCOMP_RELAY` | relay base URL; required unless `standalone` |
 | `--name` | `TCOMP_NAME` | label in the web UI (default: hostname) |
 | `--allow-input` | `TCOMP_ALLOW_INPUT` | let the browser type into this terminal |
+| `--token` | `TCOMP_TOKEN` | token to present to the relay |
 
 Relay parameters, which configure whichever relay is running — the one embedded
 in `standalone` or a separate `tcomp serve`. `standalone` takes the first two as
@@ -82,6 +97,7 @@ flags as well:
 | --- | --- | --- | --- |
 | `--bind` | `TCOMP_BIND` | `127.0.0.1:0` embedded, `0.0.0.0:8080` serving | listen address; a bare IP takes a random port |
 | `--public-url` | `TCOMP_PUBLIC_URL` | the bound address | base URL session links are built from |
+| | `TCOMP_TOKEN` | none for `serve`, minted for `standalone` | token the relay requires; unset leaves `serve` open |
 | | `TCOMP_WEB_DIR` | `web` | directory holding the viewer pages |
 | | `TCOMP_ENDED_TTL` | `60` | seconds a cleanly-exited session is kept |
 | | `TCOMP_STALE_TTL` | `14400` | seconds a disconnected session is kept |

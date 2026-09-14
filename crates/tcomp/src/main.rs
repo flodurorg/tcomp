@@ -29,6 +29,7 @@ struct Cli {
     #[arg(long, env = "TCOMP_NAME", global = true)]
     name: Option<String>,
 
+    /// Token to present to the relay
     #[arg(long, env = "TCOMP_TOKEN", global = true)]
     token: Option<String>,
 
@@ -50,6 +51,7 @@ enum Cmd {
         #[arg(long, env = "TCOMP_NAME")]
         name: Option<String>,
 
+        /// Token the embedded relay requires; one is minted when unset
         #[arg(long, env = "TCOMP_TOKEN")]
         token: Option<String>,
 
@@ -193,14 +195,22 @@ async fn run_pty(
     let (writes_tx, writes_rx) = std::sync::mpsc::channel::<Vec<u8>>();
 
     // Resolve the relay URL — for Standalone, start an embedded server first.
+    let mut token = token;
     let relay_url: Option<String> = match mode {
         PtyMode::Remote { relay } => Some(relay),
         PtyMode::Standalone { bind, public_url } => {
+            // Only a minted token is safe to put in the printed link.
+            let minted = token.is_none();
+            if minted {
+                token = Some(new_token());
+            }
             // Bind on a random port, start relay in background.
             let cfg = server::config::Config {
                 bind,
                 public_url,
                 web_dir: web_dir(),
+                token: token.clone(),
+                token_in_links: minted,
                 ..server::config::Config::from_env()
             };
             // Channel so the server can hand us the bound address.
@@ -362,6 +372,10 @@ fn pump_writes(mut writer: Box<dyn Write + Send>, writes: std::sync::mpsc::Recei
         }
         let _ = writer.flush();
     }
+}
+
+fn new_token() -> String {
+    format!("{:032x}", rand::random::<u128>())
 }
 
 fn hostname() -> String {

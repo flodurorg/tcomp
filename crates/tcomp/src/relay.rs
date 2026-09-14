@@ -3,6 +3,7 @@ use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::Message;
 
 const PING_INTERVAL: Duration = Duration::from_secs(20);
@@ -82,6 +83,14 @@ pub async fn run(
                 }
             }
             Err(error) => {
+                if let Some(Rejected(reason)) = error.downcast_ref::<Rejected>() {
+                    crate::term::note(
+                        crate::term::Note::Warn,
+                        &format!("relay refused this session: {reason}"),
+                    );
+                    drain(&mut events).await;
+                    return;
+                }
                 tracing_eprint(&error, session.is_none());
             }
         }
@@ -126,11 +135,26 @@ async fn connect(
             let ack: proto::HelloAck = serde_json::from_str(&text)?;
             Ok((socket, ack))
         }
+        Some(Ok(Message::Close(Some(frame)))) if frame.code == CloseCode::Policy => {
+            Err(Rejected(frame.reason.to_string()).into())
+        }
         Some(Ok(_)) => Err(anyhow!("relay sent an unexpected frame")),
         Some(Err(error)) => Err(error.into()),
         None => Err(anyhow!("relay closed the connection")),
     }
 }
+
+/// Turned away on purpose; `run` gives up rather than reconnecting forever.
+#[derive(Debug)]
+struct Rejected(String);
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Rejected {}
 
 async fn pump(
     socket: &mut Socket,

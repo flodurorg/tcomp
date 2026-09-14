@@ -89,6 +89,7 @@ function render(sessions) {
 async function poll() {
   try {
     const response = await fetch('/api/sessions', { cache: 'no-store' });
+    if (response.status === 401) return void location.reload();
     if (response.ok) render(await response.json());
   } catch (_) {}
   setTimeout(poll, 2000);

@@ -227,8 +227,6 @@ impl Session {
         epoch
     }
 
-    /// Part of the auth seam: lets a caller gate write access without sending bytes.
-    #[allow(dead_code)]
     pub fn allows_input(&self) -> bool {
         self.lock().allow_input
     }
@@ -415,6 +413,7 @@ mod tests {
             scrollback: 100,
             history_bytes: 64,
             token: None,
+            token_in_links: false,
         }
     }
 

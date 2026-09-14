@@ -15,18 +15,16 @@ pub async fn upgrade(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if authorize(&app.config, &headers, Access::View { session: &id })
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Err(rejection) = authorize(&app.config, &headers, Access::View { session: &id }).await {
+        return (rejection.0, rejection.1).into_response();
     }
     let Some(session) = app.store.get(&id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let may_write = authorize(&app.config, &headers, Access::Write { session: &id })
-        .await
-        .is_ok();
+    let may_write = session.allows_input()
+        && authorize(&app.config, &headers, Access::Write { session: &id })
+            .await
+            .is_ok();
     ws.on_upgrade(move |socket| handle(socket, session, may_write))
 }
 

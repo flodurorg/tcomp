@@ -258,6 +258,15 @@ function onControl(frame) {
   }
 }
 
+async function signedOut() {
+  try {
+    const response = await fetch('/api/sessions', { cache: 'no-store' });
+    return response.status === 401;
+  } catch (_) {
+    return false;
+  }
+}
+
 function connect() {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${scheme}://${location.host}/ws/view/${id}`);
@@ -273,7 +282,8 @@ function connect() {
   };
   socket = ws;
   ws.onopen = () => { backoff = 500; };
-  ws.onclose = () => {
+  ws.onclose = async () => {
+    if (await signedOut()) return void location.reload();
     if (++failures >= 3) {
       badge.className = 'badge stale';
       badge.textContent = 'gone';

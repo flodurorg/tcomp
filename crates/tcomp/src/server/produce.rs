@@ -1,7 +1,7 @@
 use crate::server::auth::{authorize, Access};
 use crate::server::session::Session;
 use crate::server::App;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
@@ -25,8 +25,13 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
         token: hello.token.as_deref(),
     };
     if let Err(rejection) = authorize(&app.config, &headers, access).await {
-        tracing::warn!(reason = rejection.1, "producer rejected");
-        let _ = sink.send(Message::Close(None)).await;
+        tracing::warn!(reason = rejection.1, name = %hello.name, "producer rejected");
+        let _ = sink
+            .send(Message::Close(Some(CloseFrame {
+                code: close_code::POLICY,
+                reason: rejection.1.into(),
+            })))
+            .await;
         return;
     }
 

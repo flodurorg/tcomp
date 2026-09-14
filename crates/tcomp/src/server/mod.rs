@@ -6,12 +6,13 @@ pub mod view;
 
 use anyhow::Context;
 use auth::{authorize, Access};
-use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::extract::{Path, Query, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::{Form, Json, Router};
 use config::Config;
+use serde::Deserialize;
 use session::Store;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,6 +35,13 @@ pub struct App {
 /// Start the relay server. Resolves once the server stops (signal or error).
 /// `on_ready` is called with the bound address just before accepting connections.
 pub async fn serve(mut config: Config, on_ready: impl FnOnce(&str)) -> anyhow::Result<()> {
+    if let Some(token) = config.token.as_deref() {
+        anyhow::ensure!(
+            auth::is_well_formed(token),
+            "TCOMP_TOKEN must be URL-safe: letters, digits and -._~ only"
+        );
+    }
+
     // Bind first: standalone may ask for port 0 and needs the bound address to
     // build public_url, which the router captures via App state.
     let listener = tokio::net::TcpListener::bind(&config.bind)
@@ -68,6 +76,7 @@ pub async fn serve(mut config: Config, on_ready: impl FnOnce(&str)) -> anyhow::R
     let router = Router::new()
         .route("/", get(index))
         .route("/healthz", get(|| async { "ok" }))
+        .route("/login", get(login_page).post(login))
         .route("/api/sessions", get(list_sessions))
         .route("/s/{id}", get(session_page))
         .route("/ws/produce", get(produce::upgrade))
@@ -78,7 +87,17 @@ pub async fn serve(mut config: Config, on_ready: impl FnOnce(&str)) -> anyhow::R
         )
         .with_state(app);
 
-    tracing::info!(bind = %bound, public_url = %config.public_url, "tcomp relay listening");
+    tracing::info!(
+        bind = %bound,
+        public_url = %config.public_url,
+        auth = config.token.is_some(),
+        "tcomp relay listening"
+    );
+    if config.token.is_none() {
+        tracing::warn!(
+            "no TCOMP_TOKEN set: anyone who can reach this relay can watch every session"
+        );
+    }
     on_ready(&bound);
 
     const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
@@ -109,12 +128,13 @@ async fn terminated() {
     }
 }
 
-async fn index(State(app): State<App>, headers: HeaderMap) -> Response {
-    if authorize(&app.config, &headers, Access::Index)
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
+async fn index(
+    State(app): State<App>,
+    Query(query): Query<TokenQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(denied) = admit(&app, &headers, Access::Index, &query, "/").await {
+        return denied;
     }
     page(&app, "index.html").await
 }
@@ -122,13 +142,13 @@ async fn index(State(app): State<App>, headers: HeaderMap) -> Response {
 async fn session_page(
     State(app): State<App>,
     Path(id): Path<String>,
+    Query(query): Query<TokenQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if authorize(&app.config, &headers, Access::View { session: &id })
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
+    let access = Access::View { session: &id };
+    let back = safe_next(&format!("/s/{id}"));
+    if let Some(denied) = admit(&app, &headers, access, &query, &back).await {
+        return denied;
     }
     if app.store.get(&id).is_none() {
         return (StatusCode::NOT_FOUND, "no such session").into_response();
@@ -137,13 +157,119 @@ async fn session_page(
 }
 
 async fn list_sessions(State(app): State<App>, headers: HeaderMap) -> Response {
-    if authorize(&app.config, &headers, Access::Index)
-        .await
-        .is_err()
-    {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Err(rejection) = authorize(&app.config, &headers, Access::Index).await {
+        return (
+            rejection.0,
+            Json(serde_json::json!({ "error": rejection.1 })),
+        )
+            .into_response();
     }
     Json(app.store.list(&app.config)).into_response()
+}
+
+#[derive(Deserialize)]
+struct TokenQuery {
+    token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LoginForm {
+    token: String,
+    #[serde(default)]
+    next: String,
+}
+
+/// Gates a page a browser navigates to; `Some` is the response to send instead.
+/// A `?token=` that works becomes a cookie and redirects to the clean URL.
+async fn admit(
+    app: &App,
+    headers: &HeaderMap,
+    access: Access<'_>,
+    query: &TokenQuery,
+    path: &str,
+) -> Option<Response> {
+    if let Some(token) = query.token.as_deref() {
+        if auth::accepts(&app.config, token) {
+            return Some(authenticated(app, headers, token, path));
+        }
+    }
+    match authorize(&app.config, headers, access).await {
+        Ok(_) => None,
+        Err(rejection) => Some(sign_in(app, rejection.0).await),
+    }
+}
+
+async fn login_page(State(app): State<App>, headers: HeaderMap) -> Response {
+    if authorize(&app.config, &headers, Access::Index)
+        .await
+        .is_ok()
+    {
+        return Redirect::to("/").into_response();
+    }
+    sign_in(&app, StatusCode::OK).await
+}
+
+async fn login(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    let token = form.token.trim();
+    if auth::accepts(&app.config, token) {
+        return authenticated(&app, &headers, token, &safe_next(&form.next));
+    }
+    tracing::warn!("failed sign-in");
+    Redirect::to(&format!(
+        "/login?bad=1&next={}",
+        utf8_percent_encode(&safe_next(&form.next))
+    ))
+    .into_response()
+}
+
+fn utf8_percent_encode(path: &str) -> String {
+    path.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+fn authenticated(app: &App, headers: &HeaderMap, token: &str, path: &str) -> Response {
+    let cookie = auth::set_cookie(&app.config, headers, token);
+    match HeaderValue::from_str(&cookie) {
+        Ok(cookie) => ([(header::SET_COOKIE, cookie)], Redirect::to(path)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "cannot build the session cookie");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn sign_in(app: &App, status: StatusCode) -> Response {
+    match tokio::fs::read_to_string(format!("{}/login.html", app.config.web_dir)).await {
+        Ok(body) => (status, Html(body)).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "cannot read the sign-in page");
+            (status, "a token is required").into_response()
+        }
+    }
+}
+
+/// Same-origin absolute paths only, so `next` cannot leave this relay.
+fn safe_next(next: &str) -> String {
+    let next = next.trim();
+    let local = next.starts_with('/')
+        && !next.starts_with("//")
+        && !next.contains('\\')
+        && !next.bytes().any(|b| b < 0x20 || b == 0x7f);
+    if local {
+        next.to_string()
+    } else {
+        "/".to_string()
+    }
 }
 
 async fn page(app: &App, name: &str) -> Response {
@@ -153,6 +279,45 @@ async fn page(app: &App, name: &str) -> Response {
             tracing::error!(%error, name, "cannot read page");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::{safe_next, utf8_percent_encode};
+
+    #[test]
+    fn a_local_path_is_kept() {
+        assert_eq!(safe_next("/"), "/");
+        assert_eq!(safe_next("/s/abc123"), "/s/abc123");
+        assert_eq!(safe_next("  /s/abc123  "), "/s/abc123");
+    }
+
+    #[test]
+    fn anywhere_off_this_relay_falls_back_to_the_index() {
+        for hostile in [
+            "//evil.example.com",
+            "https://evil.example.com",
+            "http://evil.example.com",
+            "/\\evil.example.com",
+            "evil.example.com",
+            "",
+        ] {
+            assert_eq!(safe_next(hostile), "/", "{hostile:?} escaped the relay");
+        }
+    }
+
+    #[test]
+    fn a_header_break_cannot_be_smuggled_through_next() {
+        assert_eq!(safe_next("/s/a\r\nSet-Cookie: x=y"), "/");
+        assert_eq!(safe_next("/s/a\nLocation: http://evil"), "/");
+    }
+
+    #[test]
+    fn encoding_protects_the_query_it_lands_in() {
+        assert_eq!(utf8_percent_encode("/s/abc"), "/s/abc");
+        assert_eq!(utf8_percent_encode("/s/a b"), "/s/a%20b");
+        assert_eq!(utf8_percent_encode("/s/a&b=c"), "/s/a%26b%3Dc");
     }
 }
 
