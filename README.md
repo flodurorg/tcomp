@@ -106,6 +106,47 @@ Status lines go to stderr, never into the stream the browser sees, so they canno
 be confused with the command's own output. They are coloured when stderr is a
 terminal and plain otherwise, honouring `NO_COLOR` and `TERM=dumb`.
 
+## Tailscale
+
+`tcomp standalone` binds `127.0.0.1` on a random port, so nothing off the machine
+can reach it. `tailscale serve` puts it on your tailnet without opening one: it
+terminates TLS at the tailnet edge and proxies to loopback.
+
+Start the session, then publish the port it printed:
+
+```sh
+tcomp standalone -- claude     # tcomp: watch at http://127.0.0.1:45955/s/4652bec6…
+tailscale serve --bg 45955     # from another shell
+```
+
+Open `https://<machine>.<tailnet>.ts.net/s/4652bec6…` — same path, tailnet host
+instead of `127.0.0.1`. The viewer builds its links and its websocket from
+whatever address you loaded it on, so the proxied host needs no configuration;
+only the URL tcomp prints on stderr is the loopback one. This needs HTTPS
+enabled for the tailnet; without it, `tailscale serve --bg --http=80 45955` and
+plain `http://` works the same way.
+
+`tailscale serve status` shows what is published, `tailscale serve reset` takes
+it back down.
+
+The port is new on every run, and `TCOMP_BIND` does not apply to `standalone`.
+For an address that outlives a single command, run the relay yourself on a fixed
+port and attach to it as a client instead:
+
+```sh
+TCOMP_BIND=127.0.0.1:8080 TCOMP_PUBLIC_URL=https://<machine>.<tailnet>.ts.net tcomp serve
+tailscale serve --bg 8080
+tcomp --relay http://localhost:8080 -- claude
+```
+
+Now the URL tcomp prints is already the tailnet one, and every session lands on
+the same host.
+
+A tailnet is not an audience of one: everyone on it reaches every session, and
+`--allow-input` hands them all a shell — see Security, and narrow it with ACLs
+if the tailnet is shared. Do not reach for `tailscale funnel`; that publishes to
+the open internet, where an unauthenticated terminal feed is as bad as it sounds.
+
 ## Relay
 
 `tcomp serve` reads its configuration from the environment:
