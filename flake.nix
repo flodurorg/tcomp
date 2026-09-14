@@ -19,6 +19,12 @@
             rust-analyzer
             pkg-config
             websocat
+
+            # docs/record-demo.sh
+            chromium
+            ffmpeg-full
+            xvfb-run
+            gifsicle
           ];
           RUST_BACKTRACE = "1";
         };
