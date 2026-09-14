@@ -90,14 +90,19 @@ flags as well:
 
 ## Sessions
 
-A session is live while the producer is connected, `finished` once the command
-exits, and `disconnected` if the producer vanishes — greyed out, history only,
-and live again by itself if the client reconnects. The child's exit code is the
-wrapper's, and status lines go to stderr, never into the stream the browser sees.
+| In the UI | Status | When | Kept for |
+| --- | --- | --- | --- |
+| live | `live` | producer connected | while connected |
+| interactive | `live` | producer connected, started with `--allow-input` | while connected |
+| finished | `ended` | the command exited and the relay was told | `TCOMP_ENDED_TTL` |
+| disconnected | `stale` | the producer vanished without saying goodbye | `TCOMP_STALE_TTL` |
+
+A disconnected session is greyed out and history only, and goes live again by
+itself if the client reconnects. Input is refused whenever a session is not live.
+The child's exit code is the wrapper's, and status lines go to stderr, never into
+the stream the browser sees.
 
 ## Development
-
-Rust is not on `PATH` outside the Nix shell.
 
 ```sh
 nix develop
