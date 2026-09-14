@@ -6,13 +6,27 @@
 <title>tcomp</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
-<body>
+<body class="dashboard">
 <header class="topbar">
   <div class="brand">tcomp <span>terminal companion</span></div>
   <div class="spacer"></div>
   <div class="count" id="count"></div>
+  <div class="layout-switcher" role="group" aria-label="Terminal layout">
+    <button type="button" data-layout="floating" title="Floating windows" aria-label="Floating windows">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5.5" width="11" height="9" rx="1.5"></rect><rect x="6.5" y="2.5" width="11" height="9" rx="1.5"></rect></svg>
+      <span>Floating</span>
+    </button>
+    <button type="button" data-layout="tiles" title="Tiles" aria-label="Tiles">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="6" height="6" rx="1"></rect><rect x="11.5" y="2.5" width="6" height="6" rx="1"></rect><rect x="2.5" y="11.5" width="6" height="6" rx="1"></rect><rect x="11.5" y="11.5" width="6" height="6" rx="1"></rect></svg>
+      <span>Tiles</span>
+    </button>
+    <button type="button" data-layout="list" title="List" aria-label="List">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="15" height="3" rx="1"></rect><rect x="2.5" y="8.5" width="15" height="3" rx="1"></rect><rect x="2.5" y="14" width="15" height="3" rx="1"></rect></svg>
+      <span>List</span>
+    </button>
+  </div>
 </header>
-<main id="grid" class="grid"></main>
+<main id="grid" class="grid floating"></main>
 <template id="empty">
   <div class="empty">
     <div class="empty-icon">⌨</div>
@@ -22,10 +36,53 @@
   </div>
 </template>
 <script>
+const LAYOUT_KEY = 'tcomp.layout';
+const POSITIONS_KEY = 'tcomp.floating-positions';
+const layouts = new Set(['floating', 'tiles', 'list']);
 const grid = document.getElementById('grid');
 const count = document.getElementById('count');
 const emptyTpl = document.getElementById('empty');
+const layoutButtons = [...document.querySelectorAll('[data-layout]')];
 const relayUrl = location.origin;
+let layout = loadLayout();
+let positions = loadPositions();
+let topZ = Object.values(positions).reduce((z, position) =>
+  Math.max(z, Number.isFinite(position.z) ? position.z : 0), 0);
+let latestSessions = [];
+let drag = null;
+let positionSnapshot = '';
+
+function loadLayout() {
+  try {
+    const saved = localStorage.getItem(LAYOUT_KEY);
+    if (layouts.has(saved)) return saved;
+  } catch (_) {}
+  return 'floating';
+}
+
+function loadPositions() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(POSITIONS_KEY) || '{}');
+    if (!saved || Array.isArray(saved) || typeof saved !== 'object') return {};
+    return Object.fromEntries(Object.entries(saved).filter(([, position]) =>
+      position && Number.isFinite(position.x) && Number.isFinite(position.y)));
+  } catch (_) {
+    return {};
+  }
+}
+
+function store(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (_) {}
+}
+
+function storePositions() {
+  const next = JSON.stringify(positions);
+  if (next === positionSnapshot) return;
+  store(POSITIONS_KEY, next);
+  positionSnapshot = next;
+}
 
 function duration(seconds) {
   if (seconds == null) return '';
@@ -51,9 +108,10 @@ function card(session) {
   const a = document.createElement('a');
   a.className = `window ${session.status}`;
   a.href = `/s/${session.id}`;
+  a.dataset.sessionId = session.id;
+  a.draggable = false;
 
   const expiry = session.expires_in != null ? `expires in ${duration(session.expires_in)}` : '';
-  const preview = session.preview || '';
 
   a.innerHTML = `
     <div class="titlebar">
@@ -62,42 +120,180 @@ function card(session) {
       <div class="badge ${session.status}"></div>
     </div>
     <pre class="preview"></pre>
-    <div class="meta"><span></span><span class="spacer"></span><span></span></div>`;
+    <div class="meta"><span class="dimensions"></span><span class="updated"></span><span class="expiry"></span></div>`;
 
   a.querySelector('.title b').textContent = session.title || session.name;
   a.querySelector('.title em').textContent = [session.cwd, session.cmd].filter(Boolean).join(' · ');
   a.querySelector('.badge').textContent = label(session);
-  a.querySelector('.preview').textContent = preview;
-  const meta = a.querySelectorAll('.meta span');
-  meta[0].textContent = `${session.cols}×${session.rows} · ${ago(session.updated_at)}`
+  a.querySelector('.preview').textContent = session.preview || '';
+  a.querySelector('.dimensions').textContent = `${session.cols}×${session.rows}`
     + (session.input ? ' · input' : '');
-  meta[2].textContent = expiry;
+  a.querySelector('.updated').textContent = ago(session.updated_at);
+  a.querySelector('.expiry').textContent = expiry;
+  makeDraggable(a, session.id);
   return a;
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function positionBounds(window) {
+  const inset = 12;
+  return {
+    minX: inset,
+    maxX: Math.max(inset, grid.clientWidth - window.offsetWidth - inset),
+    minY: inset,
+    maxY: Math.max(inset, grid.clientHeight - window.offsetHeight - inset),
+  };
+}
+
+function place(window, id) {
+  const bounds = positionBounds(window);
+  let position = positions[id];
+  if (!position) {
+    position = {
+      x: bounds.minX + Math.random() * (bounds.maxX - bounds.minX),
+      y: bounds.minY + Math.random() * (bounds.maxY - bounds.minY),
+      z: ++topZ,
+    };
+  }
+  position.x = Math.round(clamp(position.x, bounds.minX, bounds.maxX));
+  position.y = Math.round(clamp(position.y, bounds.minY, bounds.maxY));
+  if (!Number.isFinite(position.z)) position.z = ++topZ;
+  positions[id] = position;
+  window.style.left = `${position.x}px`;
+  window.style.top = `${position.y}px`;
+  window.style.zIndex = position.z;
+}
+
+function makeDraggable(window, id) {
+  const handle = window.querySelector('.titlebar');
+  let suppressClickUntil = 0;
+
+  handle.addEventListener('pointerdown', event => {
+    if (layout !== 'floating' || event.button !== 0 || drag) return;
+    event.preventDefault();
+    const position = positions[id];
+    if (!position) return;
+    drag = {
+      window,
+      id,
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      x: position.x,
+      y: position.y,
+      moved: false,
+    };
+  });
+
+  handle.addEventListener('pointermove', event => {
+    if (!drag || drag.window !== window || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.clientX;
+    const dy = event.clientY - drag.clientY;
+    if (!drag.moved && Math.abs(dx) + Math.abs(dy) <= 4) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      const position = positions[id];
+      position.z = ++topZ;
+      window.style.zIndex = position.z;
+      window.classList.add('dragging');
+      handle.setPointerCapture(event.pointerId);
+    }
+    const bounds = positionBounds(window);
+    const position = positions[id];
+    position.x = Math.round(clamp(drag.x + dx, bounds.minX, bounds.maxX));
+    position.y = Math.round(clamp(drag.y + dy, bounds.minY, bounds.maxY));
+    window.style.left = `${position.x}px`;
+    window.style.top = `${position.y}px`;
+  });
+
+  function finish(event) {
+    if (!drag || drag.window !== window || drag.pointerId !== event.pointerId) return;
+    if (drag.moved) suppressClickUntil = performance.now() + 300;
+    window.classList.remove('dragging');
+    drag = null;
+    storePositions();
+  }
+
+  handle.addEventListener('pointerup', finish);
+  handle.addEventListener('pointercancel', finish);
+  window.addEventListener('click', event => {
+    if (performance.now() < suppressClickUntil) event.preventDefault();
+  });
+  window.addEventListener('dragstart', event => event.preventDefault());
+}
+
+function syncLayout() {
+  grid.className = `grid ${layout}`;
+  for (const button of layoutButtons) {
+    button.setAttribute('aria-pressed', button.dataset.layout === layout ? 'true' : 'false');
+  }
+}
+
 function render(sessions) {
+  latestSessions = sessions;
   count.textContent = sessions.length
-    ? `${sessions.filter(s => s.status === 'live').length} live · ${sessions.length} total`
+    ? `${sessions.filter(session => session.status === 'live').length} live · ${sessions.length} total`
     : '';
+  syncLayout();
   grid.replaceChildren();
+
   if (!sessions.length) {
     const empty = emptyTpl.content.cloneNode(true);
     empty.querySelector('#relay-url').textContent = relayUrl;
     grid.append(empty);
+    storePositions();
     return;
   }
-  for (const session of sessions) grid.append(card(session));
+
+  const windows = sessions.map(session => card(session));
+  grid.append(...windows);
+  if (layout === 'floating') {
+    requestAnimationFrame(() => {
+      windows.forEach(window => place(window, window.dataset.sessionId));
+      storePositions();
+    });
+  } else {
+    storePositions();
+  }
 }
+
+for (const button of layoutButtons) {
+  button.addEventListener('click', () => {
+    const next = button.dataset.layout;
+    if (!layouts.has(next) || next === layout) return;
+    layout = next;
+    store(LAYOUT_KEY, layout);
+    render(latestSessions);
+  });
+}
+
+let resizeTimer;
+addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (layout !== 'floating') return;
+    requestAnimationFrame(() => {
+      for (const window of grid.querySelectorAll('.window')) {
+        place(window, window.dataset.sessionId);
+      }
+      storePositions();
+    });
+  }, 100);
+});
 
 async function poll() {
   try {
     const response = await fetch('/api/sessions', { cache: 'no-store' });
     if (response.status === 401) return void location.reload();
-    if (response.ok) render(await response.json());
+    if (response.ok && !drag) render(await response.json());
   } catch (_) {}
   setTimeout(poll, 2000);
 }
 
+syncLayout();
 poll();
 </script>
 </body>
