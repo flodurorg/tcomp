@@ -429,7 +429,7 @@ async fn run_pty(
         announce(
             &relay_tx,
             &format!(
-                "{} exited ({code}) — press r to restart, anything else quits (5s)",
+                "{} exited ({code}) — press r to restart (5s)",
                 program(&command[0])
             ),
         );
