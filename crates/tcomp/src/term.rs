@@ -54,39 +54,14 @@ fn render_note(kind: Note, body: &str, url: Option<&str>, styled: bool) -> Strin
 
 #[derive(Clone, Copy)]
 pub enum Note {
+    /// Neutral status; no caller yet, kept so the three levels stay symmetric.
+    #[allow(dead_code)]
     Info,
     Good,
     Warn,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn plain_output_carries_no_escapes() {
-        let line = render_note(Note::Good, "watch at", Some("http://x/s/1"), false);
-        assert_eq!(line, "tcomp: watch at http://x/s/1\r\n");
-        assert!(!line.contains('\x1b'));
-    }
-
-    #[test]
-    fn styled_output_underlines_the_url_and_resets() {
-        let line = render_note(Note::Good, "watch at", Some("http://x/s/1"), true);
-        assert!(line.starts_with("\x1b[2mtcomp\x1b[0m \x1b[32m▶\x1b[0m watch at "));
-        assert!(line.contains("\x1b[4;36mhttp://x/s/1\x1b[0m"));
-        assert!(line.ends_with("\r\n"));
-    }
-
-    #[test]
-    fn every_line_ends_with_crlf_for_raw_mode() {
-        for styled in [true, false] {
-            for kind in [Note::Info, Note::Good, Note::Warn] {
-                assert!(render_note(kind, "x", None, styled).ends_with("\r\n"));
-            }
-        }
-    }
-}
 
 pub fn restore() {
     if RAW_ACTIVE.swap(false, Ordering::SeqCst) {
@@ -121,5 +96,34 @@ impl RawGuard {
 impl Drop for RawGuard {
     fn drop(&mut self) {
         restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_output_carries_no_escapes() {
+        let line = render_note(Note::Good, "watch at", Some("http://x/s/1"), false);
+        assert_eq!(line, "tcomp: watch at http://x/s/1\r\n");
+        assert!(!line.contains('\x1b'));
+    }
+
+    #[test]
+    fn styled_output_underlines_the_url_and_resets() {
+        let line = render_note(Note::Good, "watch at", Some("http://x/s/1"), true);
+        assert!(line.starts_with("\x1b[2mtcomp\x1b[0m \x1b[32m▶\x1b[0m watch at "));
+        assert!(line.contains("\x1b[4;36mhttp://x/s/1\x1b[0m"));
+        assert!(line.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn every_line_ends_with_crlf_for_raw_mode() {
+        for styled in [true, false] {
+            for kind in [Note::Info, Note::Good, Note::Warn] {
+                assert!(render_note(kind, "x", None, styled).ends_with("\r\n"));
+            }
+        }
     }
 }

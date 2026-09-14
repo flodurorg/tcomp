@@ -191,15 +191,29 @@ async fn run_pty(
             // Channel so the server can hand us the bound address.
             let (addr_tx, addr_rx) = tokio::sync::oneshot::channel::<String>();
             let mut addr_tx = Some(addr_tx);
+            // If the relay cannot bind it reports the reason here; on_ready never
+            // fires, addr_tx drops, and the await below fails rather than hanging.
+            let (fail_tx, fail_rx) = tokio::sync::oneshot::channel::<anyhow::Error>();
             tokio::spawn(async move {
-                let _ = server::serve(cfg, move |addr| {
+                if let Err(error) = server::serve(cfg, move |addr| {
                     if let Some(tx) = addr_tx.take() {
                         let _ = tx.send(addr.to_string());
                     }
                 })
-                .await;
+                .await
+                {
+                    let _ = fail_tx.send(error);
+                }
             });
-            let addr = addr_rx.await.context("embedded relay did not start")?;
+            let addr = match addr_rx.await {
+                Ok(addr) => addr,
+                Err(_) => {
+                    return Err(match fail_rx.await {
+                        Ok(error) => error.context("embedded relay failed to start"),
+                        Err(_) => anyhow::anyhow!("embedded relay failed to start"),
+                    })
+                }
+            };
             Some(format!("http://{addr}"))
         }
     };

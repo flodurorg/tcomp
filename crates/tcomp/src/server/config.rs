@@ -9,6 +9,8 @@ pub struct Config {
     pub stale_ttl: Duration,
     pub scrollback: usize,
     pub history_bytes: usize,
+    /// Reserved for the auth seam; see auth.rs.
+    #[allow(dead_code)]
     pub token: Option<String>,
 }
 
