@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/flodurorg/tcomp/compare/v0.5.0...v0.5.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **server:** emit semicolon-form SGR colours in the resync dump ([7a0b837](https://github.com/flodurorg/tcomp/commit/7a0b837d8c60c4e24cfde871fd26ad03c7fec521))
+
 ## [0.5.0](https://github.com/flodurorg/tcomp/compare/v0.4.0...v0.5.0) (2026-09-14)
 
 
