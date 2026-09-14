@@ -9,6 +9,7 @@ use bytes::Bytes;
 use futures_util::stream::{SplitStream, StreamExt};
 use futures_util::SinkExt;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub async fn upgrade(State(app): State<App>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| handle(app, headers, socket))
@@ -71,15 +72,25 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
     session.attach_input(epoch, input_tx);
+    let ping_every = app.config.producer_ping();
     let downstream = tokio::spawn(async move {
-        while let Some(bytes) = input_rx.recv().await {
-            if sink.send(Message::Binary(bytes)).await.is_err() {
+        let mut ping = tokio::time::interval(ping_every);
+        ping.tick().await;
+        loop {
+            let message = tokio::select! {
+                bytes = input_rx.recv() => match bytes {
+                    Some(bytes) => Message::Binary(bytes),
+                    None => break,
+                },
+                _ = ping.tick() => Message::Ping(Bytes::new()),
+            };
+            if sink.send(message).await.is_err() {
                 break;
             }
         }
     });
 
-    let clean_exit = pump(&session, &mut stream).await;
+    let clean_exit = pump(&session, &mut stream, app.config.producer_timeout).await;
 
     downstream.abort();
     session.detach_input(epoch);
@@ -91,9 +102,21 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
     }
 }
 
-async fn pump(session: &Arc<Session>, stream: &mut SplitStream<WebSocket>) -> bool {
+async fn pump(
+    session: &Arc<Session>,
+    stream: &mut SplitStream<WebSocket>,
+    timeout: Duration,
+) -> bool {
     let mut clean_exit = false;
-    while let Some(Ok(message)) = stream.next().await {
+    loop {
+        let message = match tokio::time::timeout(timeout, stream.next()).await {
+            Ok(Some(Ok(message))) => message,
+            Ok(_) => break,
+            Err(_) => {
+                tracing::info!(session = %session.id, "producer stopped answering");
+                break;
+            }
+        };
         match message {
             Message::Binary(bytes) => session.feed(bytes),
             Message::Text(text) => match serde_json::from_str::<proto::Producer>(&text) {

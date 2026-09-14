@@ -160,6 +160,7 @@ flags as well:
 | | `TCOMP_WEB_DIR` | `web` | directory holding the viewer pages |
 | | `TCOMP_ENDED_TTL` | `60` | seconds a cleanly-exited session is kept |
 | | `TCOMP_STALE_TTL` | `14400` | seconds a disconnected session is kept |
+| | `TCOMP_PRODUCER_TIMEOUT` | `60` | seconds a producer may go silent before it counts as gone |
 | | `TCOMP_SCROLLBACK` | `2000` | scrollback lines kept server-side |
 | | `TCOMP_HISTORY_BYTES` | `524288` | replay buffer per session |
 
@@ -171,6 +172,11 @@ flags as well:
 | interactive | `live` | producer connected, started with `--allow-input` | while connected |
 | finished | `ended` | the command exited and the relay was told | `TCOMP_ENDED_TTL` |
 | disconnected | `stale` | the producer vanished without saying goodbye | `TCOMP_STALE_TTL` |
+
+The relay pings every producer and marks the session disconnected once one has
+answered nothing for `TCOMP_PRODUCER_TIMEOUT`, so a host that dies without
+closing its connection — a suspended laptop, a killed container — stops being
+advertised as live.
 
 A disconnected session is greyed out and history only, and goes live again by
 itself if the client reconnects. Input is refused whenever a session is not live.

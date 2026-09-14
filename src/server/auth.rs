@@ -145,6 +145,7 @@ mod tests {
             web_dir: "web".into(),
             ended_ttl: Duration::from_secs(60),
             stale_ttl: Duration::from_secs(4 * 60 * 60),
+            producer_timeout: Duration::from_secs(60),
             scrollback: 100,
             history_bytes: 64,
             token: token.map(str::to_string),

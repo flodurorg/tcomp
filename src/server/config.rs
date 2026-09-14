@@ -8,6 +8,7 @@ pub struct Config {
     pub web_dir: String,
     pub ended_ttl: Duration,
     pub stale_ttl: Duration,
+    pub producer_timeout: Duration,
     pub scrollback: usize,
     pub history_bytes: usize,
     pub token: Option<String>,
@@ -22,11 +23,16 @@ impl Config {
             web_dir: web_dir_from_env(),
             ended_ttl: Duration::from_secs(env_num("TCOMP_ENDED_TTL", 60)),
             stale_ttl: Duration::from_secs(env_num("TCOMP_STALE_TTL", 4 * 60 * 60)),
+            producer_timeout: Duration::from_secs(env_num("TCOMP_PRODUCER_TIMEOUT", 60).max(3)),
             scrollback: env_num("TCOMP_SCROLLBACK", 2000) as usize,
             history_bytes: env_num("TCOMP_HISTORY_BYTES", 512 * 1024) as usize,
             token: token_from_env()?,
             token_in_links: false,
         })
+    }
+
+    pub fn producer_ping(&self) -> Duration {
+        self.producer_timeout / 3
     }
 
     pub fn session_url(&self, id: &str) -> String {
@@ -91,7 +97,7 @@ fn env_num(key: &str, default: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_token_file, resolve_token, Config};
+    use super::{read_token_file, resolve_token, Config, Duration};
 
     fn token_file(contents: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -110,6 +116,15 @@ mod tests {
             token_in_links,
             ..Config::from_env().unwrap()
         }
+    }
+
+    #[test]
+    fn a_live_producer_gets_two_pings_before_it_counts_as_gone() {
+        let config = Config {
+            producer_timeout: Duration::from_secs(60),
+            ..Config::from_env().unwrap()
+        };
+        assert!(config.producer_ping() * 2 < config.producer_timeout);
     }
 
     #[test]
