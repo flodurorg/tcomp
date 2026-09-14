@@ -210,7 +210,7 @@ jobs:
             ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
 
   chart:
-    needs: setup
+    needs: [setup, merge]
     if: needs.setup.outputs.build == 'true'
     runs-on: ubuntu-24.04
     steps:
