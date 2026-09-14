@@ -97,9 +97,7 @@ fn main() -> Result<()> {
         }) => {
             let mode = PtyMode::Standalone {
                 bind: listen_addr(bind),
-                public_url: server::config::normalize_public_url(
-                    &public_url.unwrap_or_default(),
-                ),
+                public_url: server::config::normalize_public_url(&public_url.unwrap_or_default()),
             };
             let code = runtime.block_on(run_pty(cmd, mode, name, token, allow_input))?;
             term::restore();
@@ -415,7 +413,10 @@ mod tests {
 
     #[test]
     fn bare_ip_gets_a_random_port() {
-        assert_eq!(listen_addr(Some("100.101.102.103".into())), "100.101.102.103:0");
+        assert_eq!(
+            listen_addr(Some("100.101.102.103".into())),
+            "100.101.102.103:0"
+        );
         assert_eq!(listen_addr(Some("fd7a::1".into())), "[fd7a::1]:0");
     }
 
