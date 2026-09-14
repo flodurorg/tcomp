@@ -24,7 +24,15 @@ pub struct App {
 
 /// Start the relay server. Resolves once the server stops (signal or error).
 /// `on_ready` is called with the bound address just before accepting connections.
-pub async fn serve(config: Config, on_ready: impl FnOnce(&str)) -> anyhow::Result<()> {
+pub async fn serve(mut config: Config, on_ready: impl FnOnce(&str)) -> anyhow::Result<()> {
+    // Bind first: standalone mode asks for port 0 and needs the real port to
+    // build public_url, which the router captures via App state.
+    let listener = tokio::net::TcpListener::bind(&config.bind).await?;
+    let bound = listener.local_addr()?.to_string();
+    if config.public_url.is_empty() {
+        config.public_url = format!("http://{bound}");
+    }
+
     let config = Arc::new(config);
     let app = App {
         config: config.clone(),
@@ -57,18 +65,6 @@ pub async fn serve(config: Config, on_ready: impl FnOnce(&str)) -> anyhow::Resul
             ServeDir::new(format!("{}/static", config.web_dir)),
         )
         .with_state(app);
-
-    let listener = tokio::net::TcpListener::bind(&config.bind).await?;
-    let bound = listener.local_addr()?.to_string();
-
-    // If public_url was left blank (standalone mode), derive it from the bound address.
-    let config = if config.public_url.is_empty() {
-        let mut c = (*config).clone();
-        c.public_url = format!("http://{bound}");
-        Arc::new(c)
-    } else {
-        config
-    };
 
     tracing::info!(bind = %bound, public_url = %config.public_url, "tcomp relay listening");
     on_ready(&bound);

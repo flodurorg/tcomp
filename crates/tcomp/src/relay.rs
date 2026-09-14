@@ -40,7 +40,7 @@ pub async fn run(
     let url = match produce_url(&params.relay) {
         Ok(url) => url,
         Err(error) => {
-            eprint!("tcomp: {error}\r\n");
+            crate::term::note(crate::term::Note::Warn, &error.to_string());
             drain(&mut events).await;
             return;
         }
@@ -56,9 +56,16 @@ pub async fn run(
             Ok((mut socket, ack)) => {
                 if session.as_deref() != Some(ack.session.as_str()) {
                     if session.is_some() {
-                        eprint!("tcomp: relay lost the old session\r\n");
+                        crate::term::note(
+                            crate::term::Note::Warn,
+                            "relay lost the old session — reconnected under a new URL",
+                        );
                     }
-                    eprint!("tcomp: watch at {}\r\n", ack.url);
+                    crate::term::note_with_url(
+                        crate::term::Note::Good,
+                        "watch at",
+                        Some(&ack.url),
+                    );
                 }
                 session = Some(ack.session);
                 backoff = BACKOFF_MIN;
@@ -183,7 +190,10 @@ fn control(frame: &proto::Producer) -> Message {
 
 fn tracing_eprint(error: &anyhow::Error, first_attempt: bool) {
     if first_attempt {
-        eprint!("tcomp: relay unavailable ({error}); retrying in background\r\n");
+        crate::term::note(
+            crate::term::Note::Warn,
+            &format!("relay unavailable ({error}); retrying in background"),
+        );
     }
 }
 

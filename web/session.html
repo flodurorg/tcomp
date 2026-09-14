@@ -22,6 +22,30 @@
   }
   .notice.show { display: block; }
 
+  .banner {
+    display: none;
+    padding: 7px 18px;
+    background: #1a2a1a;
+    border-bottom: 1px solid #2a3f2a;
+    color: #3ddc84;
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    align-items: center;
+    gap: 10px;
+  }
+  .banner.show { display: flex; }
+  .banner .banner-text { flex: 1; }
+  .banner .banner-dismiss {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 15px;
+    padding: 0 2px;
+    line-height: 1;
+  }
+  .banner .banner-dismiss:hover { color: var(--text); }
+
   #stage {
     flex: 1;
     min-height: 0;
@@ -75,6 +99,7 @@
   <div class="badge" id="badge"></div>
 </header>
 <div class="notice" id="notice"></div>
+<div class="banner" id="banner"><span class="banner-text"></span><button class="banner-dismiss" id="banner-dismiss">×</button></div>
 <main id="stage"><div id="host"></div></main>
 <nav class="keybar" id="keybar">
   <button data-seq="\x1b">esc</button>
@@ -162,8 +187,10 @@ function refit() {
     return;
   }
 
+  const banner = document.getElementById('banner');
   const chrome = document.querySelector('.topbar').offsetHeight
     + (notice.classList.contains('show') ? notice.offsetHeight : 0)
+    + (banner.classList.contains('show') ? banner.offsetHeight : 0)
     + (keybar.classList.contains('show') ? keybar.offsetHeight : 0);
   const availW = Math.max(60, document.documentElement.clientWidth - PAD);
   const availH = Math.max(60, document.documentElement.clientHeight - chrome - PAD);
@@ -223,6 +250,11 @@ function onControl(frame) {
     applyStatus(frame.status);
   } else if (frame.t === 'exit') {
     applyStatus('ended', frame.code);
+  } else if (frame.t === 'banner') {
+    const el = document.getElementById('banner');
+    el.querySelector('.banner-text').textContent = frame.text;
+    el.classList.add('show');
+    scheduleFit();
   }
 }
 
@@ -263,6 +295,11 @@ keybar.addEventListener('click', (event) => {
   if (!button) return;
   send(JSON.parse(`"${button.dataset.seq}"`));
   if (term) term.focus();
+});
+
+document.getElementById('banner-dismiss').addEventListener('click', () => {
+  document.getElementById('banner').classList.remove('show');
+  scheduleFit();
 });
 
 stage.addEventListener('click', () => {

@@ -52,6 +52,14 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
         "producer attached"
     );
 
+    // Banner is shown to every viewer, including ones that join later.
+    session.set_banner(format!(
+        "{} · {}{}",
+        hello.name,
+        hello.cmd,
+        if hello.input { " · accepting input" } else { "" }
+    ));
+
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
     session.attach_input(epoch, input_tx);
     let downstream = tokio::spawn(async move {

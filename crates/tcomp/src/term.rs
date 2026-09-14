@@ -11,6 +11,83 @@ pub fn size() -> (u16, u16) {
     }
 }
 
+/// True when stderr is a terminal that is likely to understand SGR sequences.
+fn styled() -> bool {
+    use std::io::IsTerminal;
+    std::io::stderr().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none()
+        && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true)
+}
+
+/// Print a tcomp status line to stderr — dim label, coloured body.
+/// `\r\n` because the local terminal is in raw mode while a session runs.
+pub fn note(kind: Note, body: &str) {
+    note_with_url(kind, body, None)
+}
+
+/// Same as [`note`], with a trailing URL that gets underlined when styling is on.
+pub fn note_with_url(kind: Note, body: &str, url: Option<&str>) {
+    use std::io::Write;
+    let mut err = std::io::stderr();
+    let _ = err.write_all(render_note(kind, body, url, styled()).as_bytes());
+    let _ = err.flush();
+}
+
+fn render_note(kind: Note, body: &str, url: Option<&str>, styled: bool) -> String {
+    if !styled {
+        return match url {
+            Some(url) => format!("tcomp: {body} {url}\r\n"),
+            None => format!("tcomp: {body}\r\n"),
+        };
+    }
+    let (colour, glyph) = match kind {
+        Note::Info => ("36", "●"), // cyan
+        Note::Good => ("32", "▶"), // green
+        Note::Warn => ("33", "▲"), // yellow
+    };
+    let tail = match url {
+        Some(url) => format!(" \x1b[4;36m{url}\x1b[0m"),
+        None => String::new(),
+    };
+    format!("\x1b[2mtcomp\x1b[0m \x1b[{colour}m{glyph}\x1b[0m {body}{tail}\r\n")
+}
+
+#[derive(Clone, Copy)]
+pub enum Note {
+    Info,
+    Good,
+    Warn,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_output_carries_no_escapes() {
+        let line = render_note(Note::Good, "watch at", Some("http://x/s/1"), false);
+        assert_eq!(line, "tcomp: watch at http://x/s/1\r\n");
+        assert!(!line.contains('\x1b'));
+    }
+
+    #[test]
+    fn styled_output_underlines_the_url_and_resets() {
+        let line = render_note(Note::Good, "watch at", Some("http://x/s/1"), true);
+        assert!(line.starts_with("\x1b[2mtcomp\x1b[0m \x1b[32m▶\x1b[0m watch at "));
+        assert!(line.contains("\x1b[4;36mhttp://x/s/1\x1b[0m"));
+        assert!(line.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn every_line_ends_with_crlf_for_raw_mode() {
+        for styled in [true, false] {
+            for kind in [Note::Info, Note::Good, Note::Warn] {
+                assert!(render_note(kind, "x", None, styled).ends_with("\r\n"));
+            }
+        }
+    }
+}
+
 pub fn restore() {
     if RAW_ACTIVE.swap(false, Ordering::SeqCst) {
         use std::io::Write;

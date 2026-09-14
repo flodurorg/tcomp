@@ -46,12 +46,18 @@ async fn handle(socket: WebSocket, session: Arc<Session>, may_write: bool) {
 
     let Join {
         init,
+        banner,
         payload,
         mut rx,
     } = session.join();
 
     if send_ctrl(&mut sink, &init).await.is_err() {
         return;
+    }
+    if let Some(banner) = banner {
+        if send_ctrl(&mut sink, &banner).await.is_err() {
+            return;
+        }
     }
     for chunk in payload {
         if sink.send(Message::Binary(chunk)).await.is_err() {

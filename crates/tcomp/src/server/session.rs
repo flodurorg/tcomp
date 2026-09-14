@@ -44,10 +44,12 @@ struct State {
     epoch: u64,
     allow_input: bool,
     input: Option<UnboundedSender<Bytes>>,
+    banner: Option<String>,
 }
 
 pub struct Join {
     pub init: proto::Server,
+    pub banner: Option<proto::Server>,
     pub payload: Vec<Bytes>,
     pub rx: broadcast::Receiver<Frame>,
 }
@@ -95,6 +97,7 @@ impl Session {
                 epoch: 0,
                 allow_input,
                 input: None,
+                banner: None,
             }),
         }
     }
@@ -148,6 +151,10 @@ impl Session {
             cmd: state.cmd.clone(),
             input: state.allow_input,
         };
+        let banner = state
+            .banner
+            .clone()
+            .map(|text| proto::Server::Banner { text });
         let payload = if state.status == Status::Live || state.history.is_empty() {
             vec![dump_bytes(&state.vt)]
         } else {
@@ -157,7 +164,18 @@ impl Session {
             out
         };
         let rx = self.tx.subscribe();
-        Join { init, payload, rx }
+        Join {
+            init,
+            banner,
+            payload,
+            rx,
+        }
+    }
+
+    /// Set the session banner and push it to viewers already connected.
+    pub fn set_banner(&self, text: String) {
+        self.lock().banner = Some(text.clone());
+        let _ = self.tx.send(Frame::Ctrl(proto::Server::Banner { text }));
     }
 
     pub fn dump(&self) -> Bytes {

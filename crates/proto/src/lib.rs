@@ -65,6 +65,10 @@ pub enum Server {
     Exit {
         code: Option<i32>,
     },
+    /// Out-of-band message from tcomp itself, rendered as a styled bar in the viewer.
+    Banner {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
