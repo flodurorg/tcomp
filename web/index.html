@@ -63,8 +63,8 @@ function card(session) {
     <pre class="preview"></pre>
     <div class="meta"><span></span><span class="spacer"></span><span></span></div>`;
 
-  a.querySelector('.title b').textContent = session.name;
-  a.querySelector('.title em').textContent = session.cmd;
+  a.querySelector('.title b').textContent = session.title || session.name;
+  a.querySelector('.title em').textContent = [session.cwd, session.cmd].filter(Boolean).join(' · ');
   a.querySelector('.badge').textContent = label(session);
   a.querySelector('.preview').textContent = preview;
   const meta = a.querySelectorAll('.meta span');

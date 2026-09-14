@@ -84,6 +84,7 @@ enum Cmd {
 pub enum Event {
     Output(Vec<u8>),
     Resize { cols: u16, rows: u16 },
+    Metadata(modes::Seen),
     Exit { code: i32 },
 }
 
@@ -189,7 +190,8 @@ async fn run_pty(
     for arg in &command[1..] {
         builder.arg(arg);
     }
-    if let Ok(cwd) = std::env::current_dir() {
+    let cwd = std::env::current_dir().ok();
+    if let Some(cwd) = &cwd {
         builder.cwd(cwd);
     }
     builder.env("TCOMP", "1");
@@ -266,6 +268,7 @@ async fn run_pty(
                 relay: url,
                 name: name.unwrap_or_else(hostname),
                 cmd: command.join(" "),
+                cwd: cwd.map(|path| path.display().to_string()),
                 token,
                 cols,
                 rows,
@@ -341,18 +344,25 @@ fn pump_output(mut reader: Box<dyn Read + Send>, relay: Option<UnboundedSender<E
     let mut stdout = std::io::stdout();
     let mut buf = [0u8; 16384];
     let mut pending = Vec::new();
+    let mut reported = modes::Seen::default();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
                 let chunk = &buf[..n];
-                modes::observe(&mut pending, chunk);
+                let seen = modes::observe(&mut pending, chunk);
                 if stdout.write_all(chunk).is_err() {
                     break;
                 }
                 let _ = stdout.flush();
                 if let Some(tx) = &relay {
                     if tx.send(Event::Output(chunk.to_vec())).is_err() {
+                        break;
+                    }
+                    let changed = changes(&mut reported, seen);
+                    if changed != modes::Seen::default()
+                        && tx.send(Event::Metadata(changed)).is_err()
+                    {
                         break;
                     }
                 }
@@ -391,6 +401,19 @@ fn pump_writes(mut writer: Box<dyn Write + Send>, writes: std::sync::mpsc::Recei
 
 fn new_token() -> String {
     format!("{:032x}", rand::random::<u128>())
+}
+
+fn changes(reported: &mut modes::Seen, seen: modes::Seen) -> modes::Seen {
+    let mut changed = modes::Seen::default();
+    if seen.title.is_some() && seen.title != reported.title {
+        reported.title.clone_from(&seen.title);
+        changed.title = seen.title;
+    }
+    if seen.cwd.is_some() && seen.cwd != reported.cwd {
+        reported.cwd.clone_from(&seen.cwd);
+        changed.cwd = seen.cwd;
+    }
+    changed
 }
 
 fn hostname() -> String {

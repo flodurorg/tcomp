@@ -93,7 +93,7 @@
 <body>
 <header class="topbar">
   <a class="back" href="/" title="All sessions">‹</a>
-  <div class="title"><b id="name">…</b><em id="cmd"></em></div>
+  <div class="title"><b id="name">…</b><em id="details"></em></div>
   <div class="spacer"></div>
   <div class="size" id="size"></div>
   <div class="badge" id="badge"></div>
@@ -134,6 +134,10 @@ let backoff = 500;
 let allowInput = false;
 let status = 'live';
 let failures = 0;
+let sessionName = '';
+let sessionCmd = '';
+let sessionTitle = '';
+let sessionCwd = '';
 const encoder = new TextEncoder();
 const keybar = document.getElementById('keybar');
 
@@ -225,14 +229,23 @@ function applyStatus(next, exitCode) {
   notice.classList.add('show');
 }
 
+function renderDetails() {
+  const details = [sessionCwd, sessionCmd].filter(Boolean).join(' · ');
+  document.getElementById('details').textContent = details;
+  document.getElementById('name').textContent = sessionTitle || sessionName;
+  document.title = `${sessionTitle || sessionName} — tcomp`;
+}
+
 function onControl(frame) {
   if (frame.t === 'init') {
     failures = 0;
     cols = frame.cols;
     rows = frame.rows;
-    document.getElementById('name').textContent = frame.name;
-    document.getElementById('cmd').textContent = frame.cmd;
-    document.title = `${frame.name} — tcomp`;
+    sessionName = frame.name;
+    sessionCmd = frame.cmd;
+    sessionTitle = frame.title || '';
+    sessionCwd = frame.cwd || '';
+    renderDetails();
     ensureTerminal();
     if (term.cols !== cols || term.rows !== rows) {
       term.resize(cols, rows);
@@ -255,6 +268,12 @@ function onControl(frame) {
     el.querySelector('.banner-text').textContent = frame.text;
     el.classList.add('show');
     scheduleFit();
+  } else if (frame.t === 'title') {
+    sessionTitle = frame.text;
+    renderDetails();
+  } else if (frame.t === 'cwd') {
+    sessionCwd = frame.path;
+    renderDetails();
   }
 }
 

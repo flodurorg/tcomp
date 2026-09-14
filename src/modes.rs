@@ -14,6 +14,9 @@ const CURSOR_HIDDEN: u32 = 1 << 10;
 const MODIFY_KEYS: u32 = 1 << 11;
 const NO_AUTOWRAP: u32 = 1 << 12;
 
+const MAX_PENDING: usize = 1024;
+const MAX_OSC: usize = 512;
+
 static ACTIVE: AtomicU32 = AtomicU32::new(0);
 static KITTY_DEPTH: AtomicU32 = AtomicU32::new(0);
 
@@ -25,8 +28,15 @@ fn set(bit: u32, on: bool) {
     }
 }
 
+#[derive(Default, PartialEq)]
+pub struct Seen {
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+}
+
 /// Consumes complete escape sequences from `buf`, leaving any partial tail.
-pub fn observe(buf: &mut Vec<u8>, chunk: &[u8]) {
+pub fn observe(buf: &mut Vec<u8>, chunk: &[u8]) -> Seen {
+    let mut seen = Seen::default();
     buf.extend_from_slice(chunk);
     let mut at = 0;
     while at < buf.len() {
@@ -36,16 +46,17 @@ pub fn observe(buf: &mut Vec<u8>, chunk: &[u8]) {
         }
         match sequence_len(&buf[at..]) {
             Some(len) => {
-                apply(&buf[at..at + len]);
+                apply(&buf[at..at + len], &mut seen);
                 at += len;
             }
             None => break,
         }
     }
     buf.drain(..at);
-    if buf.len() > 128 {
+    if buf.len() > MAX_PENDING {
         buf.clear();
     }
+    seen
 }
 
 fn sequence_len(bytes: &[u8]) -> Option<usize> {
@@ -79,8 +90,15 @@ fn sequence_len(bytes: &[u8]) -> Option<usize> {
     }
 }
 
-fn apply(seq: &[u8]) {
-    if seq.len() < 3 || seq[1] != b'[' {
+fn apply(seq: &[u8], seen: &mut Seen) {
+    if seq.len() < 3 {
+        return;
+    }
+    if seq[1] == b']' {
+        apply_osc(seq, seen);
+        return;
+    }
+    if seq[1] != b'[' {
         return;
     }
     let body = &seq[2..seq.len() - 1];
@@ -121,6 +139,53 @@ fn apply(seq: &[u8]) {
         }
         _ => {}
     }
+}
+
+fn apply_osc(seq: &[u8], seen: &mut Seen) {
+    let body = &seq[2..];
+    let body = match body.last() {
+        Some(0x07) => &body[..body.len() - 1],
+        _ => body.strip_suffix(b"\x1b\\").unwrap_or(body),
+    };
+    if body.len() > MAX_OSC {
+        return;
+    }
+    let Some(split) = body.iter().position(|b| *b == b';') else {
+        return;
+    };
+    let Ok(payload) = std::str::from_utf8(&body[split + 1..]) else {
+        return;
+    };
+    match &body[..split] {
+        b"0" | b"2" => seen.title = Some(payload.to_string()),
+        b"7" => seen.cwd = path_from_file_url(payload),
+        _ => {}
+    }
+}
+
+fn path_from_file_url(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("file://")?;
+    percent_decode(&rest[rest.find('/')?..])
+}
+
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            if at + 2 >= bytes.len() {
+                return None;
+            }
+            let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// Sequences undoing exactly the modes the child turned on and left on.
@@ -241,6 +306,31 @@ mod tests {
     fn osc_titles_do_not_trip_the_scanner() {
         let _g = reset();
         assert!(feed(&[b"\x1b]0;\x1b[?1049h fake title\x07plain"]).is_empty());
+    }
+
+    #[test]
+    fn title_is_captured_across_reads() {
+        let mut buf = Vec::new();
+        assert!(observe(&mut buf, b"\x1b]2;build").title.is_none());
+        let seen = observe(&mut buf, b" complete\x1b\\");
+        assert_eq!(seen.title.as_deref(), Some("build complete"));
+    }
+
+    #[test]
+    fn latest_title_in_a_chunk_wins() {
+        let mut buf = Vec::new();
+        let seen = observe(&mut buf, b"\x1b]0;one\x07\x1b]2;two\x07");
+        assert_eq!(seen.title.as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn file_url_is_reported_as_a_decoded_path() {
+        let mut buf = Vec::new();
+        let seen = observe(
+            &mut buf,
+            b"\x1b]7;file://host/home/user/a%20directory\x1b\\",
+        );
+        assert_eq!(seen.cwd.as_deref(), Some("/home/user/a directory"));
     }
 
     #[test]

@@ -18,6 +18,7 @@ pub struct Params {
     pub cols: u16,
     pub rows: u16,
     pub input: bool,
+    pub cwd: Option<String>,
 }
 
 pub fn produce_url(base: &str) -> Result<String> {
@@ -51,6 +52,8 @@ pub async fn run(
     let mut backoff = BACKOFF_MIN;
     let mut cols = params.cols;
     let mut rows = params.rows;
+    let mut title: Option<String> = None;
+    let mut cwd = params.cwd.clone();
 
     loop {
         match connect(&url, &params, &session, cols, rows).await {
@@ -64,13 +67,36 @@ pub async fn run(
                     }
                     crate::term::note_with_url(crate::term::Note::Good, "watch at", Some(&ack.url));
                 }
+                let resumed = session.as_deref() == Some(ack.session.as_str());
                 session = Some(ack.session);
                 backoff = BACKOFF_MIN;
+                if resumed {
+                    if let Some(text) = &title {
+                        if socket
+                            .send(control(&proto::Producer::Title { text: text.clone() }))
+                            .await
+                            .is_err()
+                        {
+                            continue;
+                        }
+                    }
+                    if let Some(path) = &cwd {
+                        if socket
+                            .send(control(&proto::Producer::Cwd { path: path.clone() }))
+                            .await
+                            .is_err()
+                        {
+                            continue;
+                        }
+                    }
+                }
                 match pump(
                     &mut socket,
                     &mut events,
                     &mut cols,
                     &mut rows,
+                    &mut title,
+                    &mut cwd,
                     writes.as_ref(),
                 )
                 .await
@@ -125,6 +151,7 @@ async fn connect(
         rows,
         input: params.input,
         resume: session.clone(),
+        cwd: params.cwd.clone(),
     };
     socket
         .send(Message::Text(serde_json::to_string(&hello)?.into()))
@@ -161,6 +188,8 @@ async fn pump(
     events: &mut UnboundedReceiver<Event>,
     cols: &mut u16,
     rows: &mut u16,
+    title: &mut Option<String>,
+    cwd: &mut Option<String>,
     writes: Option<&std::sync::mpsc::Sender<Vec<u8>>>,
 ) -> Outcome {
     let mut ping = tokio::time::interval(PING_INTERVAL);
@@ -188,6 +217,29 @@ async fn pump(
                     *cols = c;
                     *rows = r;
                     control(&proto::Producer::Resize { cols: c, rows: r })
+                }
+                Some(Event::Metadata(metadata)) => {
+                    if let Some(text) = metadata.title {
+                        *title = Some(text.clone());
+                        if socket
+                            .send(control(&proto::Producer::Title { text }))
+                            .await
+                            .is_err()
+                        {
+                            return Outcome::Disconnected;
+                        }
+                    }
+                    if let Some(path) = metadata.cwd {
+                        *cwd = Some(path.clone());
+                        if socket
+                            .send(control(&proto::Producer::Cwd { path }))
+                            .await
+                            .is_err()
+                        {
+                            return Outcome::Disconnected;
+                        }
+                    }
+                    continue;
                 }
                 Some(Event::Exit { code }) => {
                     let _ = socket.send(control(&proto::Producer::Exit { code })).await;

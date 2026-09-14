@@ -29,6 +29,8 @@ pub struct Session {
 struct State {
     name: String,
     cmd: String,
+    title: Option<String>,
+    cwd: Option<String>,
     cols: u16,
     rows: u16,
     status: Status,
@@ -82,6 +84,8 @@ impl Session {
             state: Mutex::new(State {
                 name,
                 cmd,
+                title: None,
+                cwd: None,
                 cols,
                 rows,
                 status: Status::Live,
@@ -124,6 +128,26 @@ impl Session {
         let _ = self.tx.send(Frame::Data(chunk));
     }
 
+    pub fn set_title(&self, text: String) {
+        let mut state = self.lock();
+        if state.title.as_deref() == Some(&text) {
+            return;
+        }
+        state.title = Some(text.clone());
+        state.updated_at = SystemTime::now();
+        let _ = self.tx.send(Frame::Ctrl(proto::Server::Title { text }));
+    }
+
+    pub fn set_cwd(&self, path: String) {
+        let mut state = self.lock();
+        if state.cwd.as_deref() == Some(&path) {
+            return;
+        }
+        state.cwd = Some(path.clone());
+        state.updated_at = SystemTime::now();
+        let _ = self.tx.send(Frame::Ctrl(proto::Server::Cwd { path }));
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) {
         let (cols, rows) = clamp_size(cols, rows);
         let mut state = self.lock();
@@ -150,6 +174,8 @@ impl Session {
             name: state.name.clone(),
             cmd: state.cmd.clone(),
             input: state.allow_input,
+            title: state.title.clone(),
+            cwd: state.cwd.clone(),
         };
         let banner = state
             .banner
@@ -286,6 +312,8 @@ impl Session {
             rows: state.rows,
             status: state.status,
             input: state.allow_input,
+            title: state.title.clone(),
+            cwd: state.cwd.clone(),
             started_at: unix(state.started_at),
             updated_at: unix(state.updated_at),
             expires_in,

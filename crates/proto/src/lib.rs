@@ -15,6 +15,8 @@ pub struct Hello {
     pub input: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +43,8 @@ impl Status {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Producer {
     Resize { cols: u16, rows: u16 },
+    Title { text: String },
+    Cwd { path: String },
     Exit { code: i32 },
 }
 
@@ -54,6 +58,8 @@ pub enum Server {
         name: String,
         cmd: String,
         input: bool,
+        title: Option<String>,
+        cwd: Option<String>,
     },
     Resize {
         cols: u16,
@@ -69,6 +75,12 @@ pub enum Server {
     Banner {
         text: String,
     },
+    Title {
+        text: String,
+    },
+    Cwd {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +92,10 @@ pub struct SessionInfo {
     pub rows: u16,
     pub status: Status,
     pub input: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     pub started_at: u64,
     pub updated_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]

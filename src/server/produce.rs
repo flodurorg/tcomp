@@ -121,6 +121,8 @@ async fn pump(
             Message::Binary(bytes) => session.feed(bytes),
             Message::Text(text) => match serde_json::from_str::<proto::Producer>(&text) {
                 Ok(proto::Producer::Resize { cols, rows }) => session.resize(cols, rows),
+                Ok(proto::Producer::Title { text }) => session.set_title(text),
+                Ok(proto::Producer::Cwd { path }) => session.set_cwd(path),
                 Ok(proto::Producer::Exit { code }) => {
                     session.mark_exit(code);
                     clean_exit = true;
@@ -149,6 +151,9 @@ fn attach(app: &App, hello: &proto::Hello) -> (Arc<Session>, u64) {
         hello.input,
         &app.config,
     ));
+    if let Some(cwd) = &hello.cwd {
+        session.set_cwd(cwd.clone());
+    }
     app.store.insert(session.clone());
     let epoch = session.epoch();
     (session, epoch)
