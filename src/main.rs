@@ -89,6 +89,9 @@ pub enum Event {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // tokio-tungstenite leaves the rustls provider to the application, and
+    // without one connect_async panics on the first https relay.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
