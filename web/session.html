@@ -159,6 +159,7 @@
     color: #fff;
   }
   .keybar .modifier { min-width: 70px; }
+  .keybar .modifier[data-modifier] { min-width: 0; padding: 0 12px; }
   .key-mod {
     color: #9aa9bd;
     font-size: 10px;
@@ -192,14 +193,9 @@
 <nav class="keybar" id="keybar" aria-label="Terminal keys" aria-hidden="true">
   <div class="key-group">
     <button class="modifier" type="button" data-modifier="shift" aria-pressed="false">Shift</button>
+    <button class="modifier" type="button" data-modifier="ctrl" aria-pressed="false"><span class="key-mod">Ctrl</span></button>
     <button type="button" data-key="escape" aria-label="Escape">Esc</button>
     <button type="button" data-key="tab">Tab</button>
-  </div>
-  <div class="key-group">
-    <button class="modifier" type="button" data-key="ctrlC" aria-label="Control C"><span class="key-mod">Ctrl</span>C</button>
-    <button class="modifier" type="button" data-key="ctrlD" aria-label="Control D"><span class="key-mod">Ctrl</span>D</button>
-    <button class="modifier" type="button" data-key="ctrlZ" aria-label="Control Z"><span class="key-mod">Ctrl</span>Z</button>
-    <button class="modifier" type="button" data-key="ctrlL" aria-label="Control L"><span class="key-mod">Ctrl</span>L</button>
   </div>
   <div class="key-group">
     <button type="button" data-key="home">Home</button>
@@ -244,10 +240,6 @@ const KEYBAR_KEY = 'tcomp.terminal-keys';
 const keySequences = {
   escape: '\x1b',
   tab: '\t',
-  ctrlC: '\x03',
-  ctrlD: '\x04',
-  ctrlZ: '\x1a',
-  ctrlL: '\x0c',
   home: '\x1b[H',
   end: '\x1b[F',
   pageUp: '\x1b[5~',
@@ -285,10 +277,12 @@ let sessionTitle = '';
 let sessionCwd = '';
 let keybarOpen = loadKeybarPreference();
 let shiftActive = false;
+let ctrlActive = false;
 const encoder = new TextEncoder();
 const keybar = document.getElementById('keybar');
 const keyboardToggle = document.getElementById('keyboard-toggle');
 const shiftKey = keybar.querySelector('[data-modifier="shift"]');
+const ctrlKey = keybar.querySelector('[data-modifier="ctrl"]');
 
 function loadKeybarPreference() {
   try {
@@ -316,7 +310,16 @@ function ensureTerminal() {
     theme: { background: '#05070b', foreground: '#dbe3ef' },
   });
   term.open(host);
-  term.onData(send);
+  term.onData((data) => {
+    if (ctrlActive || shiftActive) {
+      const composed = compose(data);
+      setShift(false);
+      setCtrl(false);
+      send(composed);
+    } else {
+      send(data);
+    }
+  });
   scheduleFit();
 }
 
@@ -332,9 +335,19 @@ function setShift(active) {
   shiftKey.setAttribute('aria-pressed', String(active));
 }
 
-function shifted(sequence) {
-  if (sequence === '\t') return '\x1b[Z';
-  if (sequence >= 'a' && sequence <= 'z') return sequence.toUpperCase();
+function setCtrl(active) {
+  ctrlActive = active;
+  ctrlKey.setAttribute('aria-pressed', String(active));
+}
+
+function compose(sequence) {
+  if (ctrlActive && sequence.length === 1 && /[a-zA-Z]/.test(sequence)) {
+    return String.fromCharCode(sequence.toLowerCase().charCodeAt(0) - 96);
+  }
+  if (shiftActive) {
+    if (sequence === '\t') return '\x1b[Z';
+    if (sequence >= 'a' && sequence <= 'z') sequence = sequence.toUpperCase();
+  }
   return sequence;
 }
 
@@ -348,7 +361,10 @@ function applyInput(enabled) {
   keyboardToggle.setAttribute('aria-expanded', String(open));
   keyboardToggle.setAttribute('aria-label', keybarOpen ? 'Hide terminal keys' : 'Show terminal keys');
   keyboardToggle.title = keybarOpen ? 'Hide terminal keys' : 'Show terminal keys';
-  if (!open) setShift(false);
+  if (!open) {
+    setShift(false);
+    setCtrl(false);
+  }
   if (term) {
     term.options.disableStdin = !active;
     if (active) term.focus();
@@ -504,14 +520,28 @@ function connect() {
 keybar.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
-  if (button.dataset.modifier === 'shift') {
-    setShift(!shiftActive);
+  if (button.dataset.modifier === 'shift' || button.dataset.modifier === 'ctrl') {
+    const isShift = button.dataset.modifier === 'shift';
+    if (isShift) setShift(!shiftActive);
+    else setCtrl(!ctrlActive);
+    if (term) term.focus();
     return;
   }
   const sequence = keySequences[button.dataset.key];
-  send(shiftActive ? shifted(sequence) : sequence);
+  send(compose(sequence));
   setShift(false);
+  setCtrl(false);
   if (term) term.focus();
+});
+
+addEventListener('keydown', (event) => {
+  if (event.key === 'Shift') setShift(true);
+  else if (event.key === 'Control') setCtrl(true);
+});
+
+addEventListener('keyup', (event) => {
+  if (event.key === 'Shift') setShift(false);
+  else if (event.key === 'Control') setCtrl(false);
 });
 
 keyboardToggle.addEventListener('click', () => {
