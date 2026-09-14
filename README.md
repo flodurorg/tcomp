@@ -5,9 +5,6 @@ default, two-way with `--allow-input`.
 
 ![tcomp mirroring a live terminal into the browser](docs/demo.gif)
 
-The command runs exactly as it would in your terminal. The browser renders it at
-the host's exact dimensions — never reflowed — and works on a phone.
-
 ## Features
 
 **standalone** — embedded relay on a loopback port, nothing to deploy. Prints the
