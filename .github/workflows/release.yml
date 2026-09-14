@@ -209,8 +209,28 @@ jobs:
           docker buildx imagetools inspect \
             ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
 
+  chart:
+    needs: setup
+    if: needs.setup.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.setup.outputs.tag }}
+
+      - uses: azure/setup-helm@v5
+
+      - name: package
+        run: helm package charts/tcomp --destination dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chart
+          path: dist/*.tgz
+          if-no-files-found: error
+
   assets:
-    needs: [setup, binaries, merge]
+    needs: [setup, binaries, merge, chart]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
@@ -219,9 +239,48 @@ jobs:
           pattern: "*-unknown-linux-musl"
           merge-multiple: true
 
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          name: chart
+
       - name: upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.setup.outputs.tag }}
-        run: gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 --clobber
+        run: gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 dist/*.tgz --clobber
+
+      - name: append install notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.setup.outputs.tag }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          BASE: ${{ github.server_url }}/${{ github.repository }}/releases/download
+        run: |
+          version="${TAG#v}"
+          gh release view "$TAG" --json body -q .body > notes.md
+          if grep -qF '<!-- install -->' notes.md; then
+            echo "install section already present"
+            exit 0
+          fi
+          cat >> notes.md <<EOF
+
+          <!-- install -->
+          ## Install
+
+          \`\`\`sh
+          docker pull ${IMAGE}:${version}
+
+          helm install tcomp ${BASE}/${TAG}/tcomp-${version}.tgz
+          \`\`\`
+
+          | | |
+          | --- | --- |
+          | container | \`${IMAGE}:${version}\` |
+          | chart | [tcomp-${version}.tgz](${BASE}/${TAG}/tcomp-${version}.tgz) |
+          | x86_64 | [tar.gz](${BASE}/${TAG}/tcomp-${TAG}-x86_64-unknown-linux-musl.tar.gz) · [sha256](${BASE}/${TAG}/tcomp-${TAG}-x86_64-unknown-linux-musl.tar.gz.sha256) |
+          | aarch64 | [tar.gz](${BASE}/${TAG}/tcomp-${TAG}-aarch64-unknown-linux-musl.tar.gz) · [sha256](${BASE}/${TAG}/tcomp-${TAG}-aarch64-unknown-linux-musl.tar.gz.sha256) |
+          EOF
+          gh release edit "$TAG" --notes-file notes.md
