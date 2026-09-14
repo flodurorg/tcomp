@@ -33,8 +33,7 @@ struct Cli {
     #[arg(long, env = "TCOMP_TOKEN", global = true)]
     token: Option<String>,
 
-    /// File holding the token, read at startup so the secret stays off the
-    /// command line and out of the environment
+    /// File holding the token
     #[arg(long, env = "TCOMP_TOKEN_FILE", global = true)]
     token_file: Option<String>,
 
@@ -181,7 +180,8 @@ async fn run_serve() -> Result<()> {
     .await
 }
 
-const NOTE_HOLD: Duration = Duration::from_millis(500);
+/// How long the restart prompt waits before giving up and exiting.
+const RESTART_PROMPT: Duration = Duration::from_secs(5);
 
 struct Shell {
     master: Box<dyn MasterPty + Send>,
@@ -243,7 +243,9 @@ impl Input {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Sink> {
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn attach(&self, writer: Box<dyn Write + Send>) {
@@ -364,10 +366,9 @@ async fn run_pty(
         }),
     };
 
-    // Child output is held back until the watch URL prints, or this fires.
     tokio::spawn(async {
-        tokio::time::sleep(NOTE_HOLD).await;
-        term::release_output();
+        tokio::time::sleep(term::NOTE_HOLD).await;
+        let _ = term::give_up_waiting();
     });
 
     let input = std::sync::Arc::new(Input::new(shell.writer));
@@ -428,13 +429,15 @@ async fn run_pty(
         announce(
             &relay_tx,
             &format!(
-                "{} exited ({code}) — press r to restart, q to quit",
+                "{} exited ({code}) — press r to restart, anything else quits (5s)",
                 program(&command[0])
             ),
         );
         let mut keys = input.keys();
+        let deadline = tokio::time::Instant::now() + RESTART_PROMPT;
         'ask: loop {
             tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => break 'session code,
                 _ = winch.recv() => {
                     let (c, r) = term::size();
                     let _ = events_tx.send(Event::Resize { cols: c, rows: r });
@@ -443,12 +446,10 @@ async fn run_pty(
                 _ = hup_sig.recv() => break 'session 129,
                 chunk = keys.recv() => {
                     let Some(chunk) = chunk else { break 'session code };
-                    for key in chunk {
-                        match key {
-                            b'r' | b'R' => break 'ask,
-                            b'q' | b'Q' | 0x03 | 0x04 => break 'session code,
-                            _ => {}
-                        }
+                    match chunk.as_slice() {
+                        [b'r' | b'R'] => break 'ask,
+                        [] => {}
+                        _ => break 'session code,
                     }
                 }
             }

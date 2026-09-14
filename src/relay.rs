@@ -66,6 +66,10 @@ pub async fn run(
                         );
                     }
                     crate::term::note_with_url(crate::term::Note::Good, "watch at", Some(&ack.url));
+                    tokio::spawn(async {
+                        tokio::time::sleep(crate::term::LINK_LINGER).await;
+                        let _ = crate::term::end_linger();
+                    });
                 }
                 let resumed = session.as_deref() == Some(ack.session.as_str());
                 session = Some(ack.session);

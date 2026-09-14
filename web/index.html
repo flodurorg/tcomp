@@ -18,13 +18,14 @@
     <div class="empty-icon">⌨</div>
     <div class="empty-title">No sessions yet</div>
     <div class="empty-hint">Start one from your terminal:</div>
-    <code>tcomp --relay RELAY_URL -- bash</code>
+    <code>tcomp --relay <span id="relay-url"></span> -- bash</code>
   </div>
 </template>
 <script>
 const grid = document.getElementById('grid');
 const count = document.getElementById('count');
 const emptyTpl = document.getElementById('empty');
+const relayUrl = location.origin;
 
 function duration(seconds) {
   if (seconds == null) return '';
@@ -80,7 +81,9 @@ function render(sessions) {
     : '';
   grid.replaceChildren();
   if (!sessions.length) {
-    grid.append(emptyTpl.content.cloneNode(true));
+    const empty = emptyTpl.content.cloneNode(true);
+    empty.querySelector('#relay-url').textContent = relayUrl;
+    grid.append(empty);
     return;
   }
   for (const session of sessions) grid.append(card(session));

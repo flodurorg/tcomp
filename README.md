@@ -1,7 +1,6 @@
 # tcomp — take your terminals on the go
 
-Start a session on your laptop and carry on with it from anywhere. Read-only by
-default, two-way with `--allow-input`.
+Start a session on your laptop and carry on with it from anywhere.
 
 ![tcomp mirroring a live terminal into the browser](docs/demo.gif)
 
@@ -14,7 +13,7 @@ watch URL and runs your command.
 tcomp standalone -- claude
 ```
 
-**client** — use a relay someone else runs. The wrapper dials *out*, so it opens
+**client** — use a relay someone else runs. The wrapper dials _out_, so it opens
 no inbound port and works behind NAT, on a customer network, or on a VPN.
 
 ```sh
@@ -147,40 +146,40 @@ set `httpRoute.timeouts.request=0s` if viewers drop.
 
 Session flags, each with an environment equivalent:
 
-| Flag | Env | Meaning |
-| --- | --- | --- |
-| `--relay` | `TCOMP_RELAY` | relay base URL; required unless `standalone` |
-| `--name` | `TCOMP_NAME` | label in the web UI (default: hostname) |
-| `--allow-input` | `TCOMP_ALLOW_INPUT` | let the browser type into this terminal |
+| Flag            | Env                 | Meaning                                                    |
+| --------------- | ------------------- | ---------------------------------------------------------- |
+| `--relay`       | `TCOMP_RELAY`       | relay base URL; required unless `standalone`               |
+| `--name`        | `TCOMP_NAME`        | label in the web UI (default: hostname)                    |
+| `--allow-input` | `TCOMP_ALLOW_INPUT` | let the browser type into this terminal                    |
 | `--exit-on-end` | `TCOMP_EXIT_ON_END` | exit when the command exits, instead of offering a restart |
-| `--token` | `TCOMP_TOKEN` | token to present to the relay |
-| `--token-file` | `TCOMP_TOKEN_FILE` | file to read that token from instead |
+| `--token`       | `TCOMP_TOKEN`       | token to present to the relay                              |
+| `--token-file`  | `TCOMP_TOKEN_FILE`  | file to read that token from instead                       |
 
 Relay parameters, which configure whichever relay is running — the one embedded
 in `standalone` or a separate `tcomp serve`. `standalone` takes the first two as
 flags as well:
 
-| Flag | Env | Default | Meaning |
-| --- | --- | --- | --- |
-| `--bind` | `TCOMP_BIND` | `127.0.0.1:0` embedded, `0.0.0.0:8080` serving | listen address; a bare IP takes a random port |
-| `--public-url` | `TCOMP_PUBLIC_URL` | the bound address | base URL session links are built from |
-| | `TCOMP_TOKEN` | none for `serve`, minted for `standalone` | token the relay requires; unset leaves `serve` open |
-| | `TCOMP_TOKEN_FILE` | none | file holding that token; a relay that cannot read it refuses to start |
-| | `TCOMP_WEB_DIR` | `web` | directory holding the viewer pages |
-| | `TCOMP_ENDED_TTL` | `60` | seconds a cleanly-exited session is kept |
-| | `TCOMP_STALE_TTL` | `14400` | seconds a disconnected session is kept |
-| | `TCOMP_PRODUCER_TIMEOUT` | `60` | seconds a producer may go silent before it counts as gone |
-| | `TCOMP_SCROLLBACK` | `2000` | scrollback lines kept server-side |
-| | `TCOMP_HISTORY_BYTES` | `524288` | replay buffer per session |
+| Flag           | Env                      | Default                                        | Meaning                                                               |
+| -------------- | ------------------------ | ---------------------------------------------- | --------------------------------------------------------------------- |
+| `--bind`       | `TCOMP_BIND`             | `127.0.0.1:0` embedded, `0.0.0.0:8080` serving | listen address; a bare IP takes a random port                         |
+| `--public-url` | `TCOMP_PUBLIC_URL`       | the bound address                              | base URL session links are built from                                 |
+|                | `TCOMP_TOKEN`            | none for `serve`, minted for `standalone`      | token the relay requires; unset leaves `serve` open                   |
+|                | `TCOMP_TOKEN_FILE`       | none                                           | file holding that token; a relay that cannot read it refuses to start |
+|                | `TCOMP_WEB_DIR`          | `web`                                          | directory holding the viewer pages                                    |
+|                | `TCOMP_ENDED_TTL`        | `60`                                           | seconds a cleanly-exited session is kept                              |
+|                | `TCOMP_STALE_TTL`        | `14400`                                        | seconds a disconnected session is kept                                |
+|                | `TCOMP_PRODUCER_TIMEOUT` | `60`                                           | seconds a producer may go silent before it counts as gone             |
+|                | `TCOMP_SCROLLBACK`       | `2000`                                         | scrollback lines kept server-side                                     |
+|                | `TCOMP_HISTORY_BYTES`    | `524288`                                       | replay buffer per session                                             |
 
 ## Sessions
 
-| In the UI | Status | When | Kept for |
-| --- | --- | --- | --- |
-| live | `live` | producer connected | while connected |
-| interactive | `live` | producer connected, started with `--allow-input` | while connected |
-| finished | `ended` | the command exited and the relay was told | `TCOMP_ENDED_TTL` |
-| disconnected | `stale` | the producer vanished without saying goodbye | `TCOMP_STALE_TTL` |
+| In the UI    | Status  | When                                             | Kept for          |
+| ------------ | ------- | ------------------------------------------------ | ----------------- |
+| live         | `live`  | producer connected                               | while connected   |
+| interactive  | `live`  | producer connected, started with `--allow-input` | while connected   |
+| finished     | `ended` | the command exited and the relay was told        | `TCOMP_ENDED_TTL` |
+| disconnected | `stale` | the producer vanished without saying goodbye     | `TCOMP_STALE_TTL` |
 
 The relay pings every producer and marks the session disconnected once one has
 answered nothing for `TCOMP_PRODUCER_TIMEOUT`, so a host that dies without
