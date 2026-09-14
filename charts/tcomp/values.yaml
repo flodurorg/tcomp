@@ -1,0 +1,92 @@
+# Sessions live in memory, so a second replica cannot serve them.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/flodurorg/tcomp
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+updateStrategy:
+  type: Recreate
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: tcomp.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Absolute URL viewers reach, e.g. https://tcomp.example.com.
+# Derived from the first ingress host when left empty.
+publicUrl: ""
+
+auth:
+  token: ""
+  existingSecret: ""
+  existingSecretKey: token
+
+config:
+  endedTtl: 60
+  staleTtl: 14400
+  scrollback: 2000
+  historyBytes: 524288
+
+logLevel: tcomp=info
+
+extraEnv: []
+
+resources: {}
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

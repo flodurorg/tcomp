@@ -59,7 +59,13 @@
   "packages": {
     ".": {
       "release-type": "rust",
-      "include-component-in-tag": false
+      "include-component-in-tag": false,
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "charts/tcomp/Chart.yaml"
+        }
+      ]
     }
   }
 }

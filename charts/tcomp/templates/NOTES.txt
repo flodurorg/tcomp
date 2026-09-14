@@ -1,0 +1,33 @@
+tcomp {{ .Chart.AppVersion }} is installed as {{ include "tcomp.fullname" . }}.
+
+{{- $url := include "tcomp.publicUrl" . }}
+{{- if $url }}
+
+Watch sessions at {{ $url }}
+{{- else if .Values.ingress.enabled }}
+
+Ingress is enabled but no host resolved; set publicUrl so watch links are correct.
+{{- else }}
+
+Reach it locally with:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tcomp.fullname" . }} 8080:{{ .Values.service.port }}
+
+then open http://localhost:8080 and set publicUrl before exposing it.
+{{- end }}
+
+{{- if not (or .Values.auth.token .Values.auth.existingSecret) }}
+
+WARNING: no token is set, so anyone who can reach this relay can watch every
+session. Set auth.token or auth.existingSecret.
+{{- end }}
+
+{{- if gt (int .Values.replicaCount) 1 }}
+
+WARNING: replicaCount is {{ .Values.replicaCount }}. Sessions are held in memory
+and are not shared between pods, so viewers will reach the wrong replica.
+{{- end }}
+
+Point a producer at it with:
+
+  tcomp --relay {{ $url | default "http://localhost:8080" }} -- your-command

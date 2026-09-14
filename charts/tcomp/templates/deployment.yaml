@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tcomp.fullname" . }}
+  labels:
+    {{- include "tcomp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "tcomp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- if and .Values.auth.token (not .Values.auth.existingSecret) }}
+        checksum/secret: {{ .Values.auth.token | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "tcomp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "tcomp.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: tcomp
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: TCOMP_BIND
+              value: "0.0.0.0:8080"
+            {{- with include "tcomp.publicUrl" . }}
+            - name: TCOMP_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if or .Values.auth.token .Values.auth.existingSecret }}
+            - name: TCOMP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tcomp.secretName" . }}
+                  key: {{ include "tcomp.secretKey" . }}
+            {{- end }}
+            - name: TCOMP_ENDED_TTL
+              value: {{ .Values.config.endedTtl | quote }}
+            - name: TCOMP_STALE_TTL
+              value: {{ .Values.config.staleTtl | quote }}
+            - name: TCOMP_SCROLLBACK
+              value: {{ .Values.config.scrollback | quote }}
+            - name: TCOMP_HISTORY_BYTES
+              value: {{ .Values.config.historyBytes | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.logLevel | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

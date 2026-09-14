@@ -78,6 +78,20 @@ actually open.
 TCOMP_PUBLIC_URL=https://tcomp.example.com docker compose up -d
 ```
 
+**kubernetes** — the chart in `charts/tcomp` runs one replica, because sessions
+live in memory and are not shared between pods. `image.tag` follows the chart's
+`appVersion`, so a release ships a chart that pins its own image.
+
+```sh
+helm install tcomp ./charts/tcomp \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=tcomp.example.com \
+  --set auth.token="$(openssl rand -hex 32)"
+```
+
+`publicUrl` is derived from the first ingress host when left empty; set it
+explicitly when a proxy sits in front.
+
 ## Parameters
 
 Session flags, each with an environment equivalent:

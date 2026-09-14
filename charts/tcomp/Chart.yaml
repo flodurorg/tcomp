@@ -1,0 +1,13 @@
+apiVersion: v2
+name: tcomp
+description: Share a terminal session in the browser over an outbound relay
+type: application
+home: https://github.com/flodurorg/tcomp
+sources:
+  - https://github.com/flodurorg/tcomp
+keywords:
+  - terminal
+  - tty
+  - broadcast
+version: 0.2.0 # x-release-please-version
+appVersion: "0.2.0" # x-release-please-version
