@@ -1,16 +1,43 @@
 # tcomp — terminal companion
 
-Run a command locally; watch it read-only in a browser.
+Run a command locally; watch it from a browser. Read-only by default, two-way
+with `--allow-input`.
 
 ![tcomp mirroring a live terminal into the browser](docs/demo.gif)
 
+The command runs exactly as it would in your terminal. The browser renders it at
+the host's exact dimensions — never reflowed — and works on a phone.
+
+## Features
+
+**standalone** — embedded relay on a loopback port, nothing to deploy. Prints the
+watch URL and runs your command.
+
 ```sh
-tcomp standalone -- claude                          # self-contained, prints a URL
-tcomp --relay https://tcomp.example.com -- claude   # via a shared relay
+tcomp standalone -- claude
 ```
 
-The command runs exactly as it would in your terminal. The browser view is
-read-only by default, at the host's exact dimensions, and works on a phone.
+**client** — use a relay someone else runs. The wrapper dials *out*, so it opens
+no inbound port and works behind NAT, on a customer network, or on a VPN.
+
+```sh
+tcomp --relay https://tcomp.example.com -- claude
+```
+
+**server** — be that relay, serving the viewer and fanning out to browsers. This
+is what the Docker image runs.
+
+```sh
+tcomp serve
+```
+
+**interactive** — let the browser type into the terminal instead of just
+watching. Off by default, decided by the host, and never safe on a relay you
+would not hand a shell to.
+
+```sh
+tcomp standalone --allow-input -- claude
+```
 
 ## Security
 
@@ -21,50 +48,55 @@ the command prints — file contents, tokens, keys. `--allow-input` raises that 
 Run the relay somewhere private or behind an authenticating proxy.
 `crates/tcomp/src/server/auth.rs` is the single seam for adding auth.
 
-## Modes
+## Deploying
 
-| Mode | Command | Notes |
-| --- | --- | --- |
-| standalone | `tcomp standalone -- <cmd>` | embedded relay, loopback unless you `--bind` |
-| client | `tcomp --relay URL -- <cmd>` | dials *out*, so NAT and VPNs are fine |
-| server | `tcomp serve` | be the relay; this is what the Docker image runs |
+**tailnet** — `--bind` the tailnet address and the printed URL works from any
+device on the tailnet. For TLS and a stable `<machine>.<tailnet>.ts.net` name,
+leave the relay on loopback and put `tailscale serve --bg <port>` in front of it
+instead. Never `tailscale funnel` it.
 
-## Client flags
+```sh
+tcomp standalone --bind "$(tailscale ip -4)" -- claude
+```
+
+**docker compose** — the image runs `tcomp serve`. Compose publishes `8080` and
+mounts `web/` read-only; set `TCOMP_PUBLIC_URL` to the address people will
+actually open.
+
+```sh
+TCOMP_PUBLIC_URL=https://tcomp.example.com docker compose up -d
+```
+
+## Parameters
+
+Session flags, each with an environment equivalent:
 
 | Flag | Env | Meaning |
 | --- | --- | --- |
 | `--relay` | `TCOMP_RELAY` | relay base URL; required unless `standalone` |
 | `--name` | `TCOMP_NAME` | label in the web UI (default: hostname) |
 | `--allow-input` | `TCOMP_ALLOW_INPUT` | let the browser type into this terminal |
-| `--bind` | `TCOMP_BIND` | `standalone`: listen address (default `127.0.0.1:0`); a bare IP takes a random port |
-| `--public-url` | `TCOMP_PUBLIC_URL` | `standalone`: base URL for the watch link (default: the bound address) |
 
-The child's exit code is the wrapper's. Dropped connections reconnect and resume;
-status lines go to stderr, never into the stream the browser sees.
+Relay parameters, which configure whichever relay is running — the one embedded
+in `standalone` or a separate `tcomp serve`. `standalone` takes the first two as
+flags as well:
 
-## Relay
+| Flag | Env | Default | Meaning |
+| --- | --- | --- | --- |
+| `--bind` | `TCOMP_BIND` | `127.0.0.1:0` embedded, `0.0.0.0:8080` serving | listen address; a bare IP takes a random port |
+| `--public-url` | `TCOMP_PUBLIC_URL` | the bound address | base URL session links are built from |
+| | `TCOMP_WEB_DIR` | `web` | directory holding the viewer pages |
+| | `TCOMP_ENDED_TTL` | `60` | seconds a cleanly-exited session is kept |
+| | `TCOMP_STALE_TTL` | `14400` | seconds a disconnected session is kept |
+| | `TCOMP_SCROLLBACK` | `2000` | scrollback lines kept server-side |
+| | `TCOMP_HISTORY_BYTES` | `524288` | replay buffer per session |
 
-`tcomp serve` is configured by environment: `TCOMP_BIND` (`0.0.0.0:8080`),
-`TCOMP_PUBLIC_URL` (default: the bound address), `TCOMP_WEB_DIR` (`web`),
-`TCOMP_ENDED_TTL` (`60`), `TCOMP_STALE_TTL` (`14400`), `TCOMP_SCROLLBACK`
-(`2000`), `TCOMP_HISTORY_BYTES` (`524288`). Terminate TLS in a proxy in front.
+## Sessions
 
 A session is live while the producer is connected, `finished` once the command
 exits, and `disconnected` if the producer vanishes — greyed out, history only,
-and live again by itself if the client reconnects.
-
-## Tailscale
-
-`--bind` the tailnet address and the URL tcomp prints works from any device on
-the tailnet:
-
-```sh
-tcomp standalone --bind "$(tailscale ip -4)" -- claude
-```
-
-For TLS and a stable `<machine>.<tailnet>.ts.net` name, leave the relay on
-loopback and `tailscale serve --bg <port>` in front of it instead. Everyone on
-the tailnet reaches every session — see Security. Never `tailscale funnel` it.
+and live again by itself if the client reconnects. The child's exit code is the
+wrapper's, and status lines go to stderr, never into the stream the browser sees.
 
 ## Development
 
