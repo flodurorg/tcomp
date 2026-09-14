@@ -36,6 +36,14 @@ would not hand a shell to.
 tcomp standalone --allow-input -- claude
 ```
 
+## Taking over an existing terminal
+
+```sh
+echo $$ # Shell PID of the terminal to take over; alternatively use ps.
+tcomp standalone --allow-input -- reptyr -T <PID>
+# Press Ctrl-L to redraw the transferred terminal.
+```
+
 ## Installing
 
 **nix** — the flake exposes the binary as `packages.default` and carries `web/`
