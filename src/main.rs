@@ -426,18 +426,26 @@ async fn run_pty(
             break code;
         }
 
-        announce(
-            &relay_tx,
-            &format!(
-                "{} exited ({code}) — press r to restart (5s)",
-                program(&command[0])
-            ),
-        );
+        let command_name = program(&command[0]);
+        let mut remaining = RESTART_PROMPT.as_secs();
+        announce(&relay_tx, &restart_prompt(command_name, code, remaining));
         let mut keys = input.keys();
         let deadline = tokio::time::Instant::now() + RESTART_PROMPT;
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.tick().await;
         'ask: loop {
             tokio::select! {
-                _ = tokio::time::sleep_until(deadline) => break 'session code,
+                _ = tokio::time::sleep_until(deadline) => {
+                    update_announcement(&relay_tx, &restart_prompt(command_name, code, 0));
+                    break 'session code;
+                }
+                _ = tick.tick(), if remaining > 1 => {
+                    remaining -= 1;
+                    update_announcement(
+                        &relay_tx,
+                        &restart_prompt(command_name, code, remaining),
+                    );
+                }
                 _ = winch.recv() => {
                     let (c, r) = term::size();
                     let _ = events_tx.send(Event::Resize { cols: c, rows: r });
@@ -521,11 +529,23 @@ async fn drain_output(handle: std::thread::JoinHandle<()>) {
     .await;
 }
 
+fn restart_prompt(command: &str, code: i32, remaining: u64) -> String {
+    format!("{command} exited ({code}) — press r to restart ({remaining}s)")
+}
+
 /// Say the same thing on the local terminal and in every viewer.
 fn announce(relay: &Option<UnboundedSender<Event>>, body: &str) {
     term::note(term::Note::Warn, body);
     if let Some(tx) = relay {
         let line = term::styled_line(term::Note::Warn, body);
+        let _ = tx.send(Event::Output(line.into_bytes()));
+    }
+}
+
+fn update_announcement(relay: &Option<UnboundedSender<Event>>, body: &str) {
+    term::update_note(term::Note::Warn, body);
+    if let Some(tx) = relay {
+        let line = term::updated_styled_line(term::Note::Warn, body);
         let _ = tx.send(Event::Output(line.into_bytes()));
     }
 }
@@ -640,13 +660,25 @@ fn web_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{listen_addr, program};
+    use super::{listen_addr, program, restart_prompt};
 
     #[test]
     fn the_restart_prompt_names_the_command_not_its_path() {
         assert_eq!(program("/usr/bin/bash"), "bash");
         assert_eq!(program("bash"), "bash");
         assert_eq!(program(""), "");
+    }
+
+    #[test]
+    fn the_restart_prompt_shows_the_remaining_seconds() {
+        assert_eq!(
+            restart_prompt("bash", 0, 5),
+            "bash exited (0) — press r to restart (5s)"
+        );
+        assert_eq!(
+            restart_prompt("bash", 1, 0),
+            "bash exited (1) — press r to restart (0s)"
+        );
     }
 
     #[test]

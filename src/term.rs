@@ -217,9 +217,27 @@ pub fn note_with_url(kind: Note, body: &str, url: Option<&str>) {
     }
 }
 
+pub fn update_note(kind: Note, body: &str) {
+    if !styled() {
+        return;
+    }
+    use std::io::Write;
+    let line = updated_styled_line(kind, body);
+    let mut err = std::io::stderr();
+    let _ = err.write_all(line.as_bytes());
+    let _ = err.flush();
+}
+
 /// The same line [`note`] prints, styled for replay into a remote viewer.
 pub fn styled_line(kind: Note, body: &str) -> String {
     render_note(kind, body, None, true, false)
+}
+
+pub fn updated_styled_line(kind: Note, body: &str) -> String {
+    format!(
+        "\x1b[1A\r\x1b[2K{}",
+        render_note(kind, body, None, true, true)
+    )
 }
 
 fn render_note(
@@ -333,6 +351,13 @@ mod tests {
     #[test]
     fn a_viewer_line_always_breaks_before_itself() {
         assert!(styled_line(Note::Warn, "bash exited (0)").starts_with("\r\n"));
+    }
+
+    #[test]
+    fn a_note_update_replaces_the_previous_line() {
+        let line = updated_styled_line(Note::Warn, "bash exited (0) — restart (4s)");
+        assert!(line.starts_with("\x1b[1A\r\x1b[2K"));
+        assert!(line.ends_with("\r\n"));
     }
 
     #[test]
