@@ -1,7 +1,7 @@
 # tcomp — take your terminals on the go
 
-Run a command locally; watch it from a browser. Read-only by default, two-way
-with `--allow-input`.
+Start a session on your laptop and carry on with it from anywhere. Read-only by
+default, two-way with `--allow-input`.
 
 ![tcomp mirroring a live terminal into the browser](docs/demo.gif)
 
