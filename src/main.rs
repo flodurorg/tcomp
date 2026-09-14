@@ -33,6 +33,11 @@ struct Cli {
     #[arg(long, env = "TCOMP_TOKEN", global = true)]
     token: Option<String>,
 
+    /// File holding the token, read at startup so the secret stays off the
+    /// command line and out of the environment
+    #[arg(long, env = "TCOMP_TOKEN_FILE", global = true)]
+    token_file: Option<String>,
+
     /// Let the web view type into this terminal
     #[arg(long, env = "TCOMP_ALLOW_INPUT", global = true)]
     allow_input: bool,
@@ -54,6 +59,10 @@ enum Cmd {
         /// Token the embedded relay requires; one is minted when unset
         #[arg(long, env = "TCOMP_TOKEN")]
         token: Option<String>,
+
+        /// File holding the token the embedded relay requires
+        #[arg(long, env = "TCOMP_TOKEN_FILE")]
+        token_file: Option<String>,
 
         /// Let the web view type into this terminal
         #[arg(long, env = "TCOMP_ALLOW_INPUT")]
@@ -92,11 +101,13 @@ fn main() -> Result<()> {
         Some(Cmd::Standalone {
             name,
             token,
+            token_file,
             allow_input,
             bind,
             public_url,
             cmd,
         }) => {
+            let token = server::config::resolve_token(token, token_file)?;
             let mode = PtyMode::Standalone {
                 bind: listen_addr(bind),
                 public_url: server::config::normalize_public_url(&public_url.unwrap_or_default()),
@@ -119,11 +130,12 @@ fn main() -> Result<()> {
                 eprintln!("tcomp: --relay or TCOMP_RELAY required (or use `tcomp standalone`)");
                 std::process::exit(1);
             };
+            let token = server::config::resolve_token(cli.token, cli.token_file)?;
             let code = runtime.block_on(run_pty(
                 cli.cmd,
                 PtyMode::Remote { relay },
                 cli.name,
-                cli.token,
+                token,
                 cli.allow_input,
             ))?;
             term::restore();
@@ -147,7 +159,7 @@ async fn run_serve() -> Result<()> {
         )
         .init();
 
-    let config = server::config::Config::from_env();
+    let config = server::config::Config::from_env()?;
     server::serve(config, |addr| {
         tracing::info!(bind = %addr, "tcomp relay ready");
     })
@@ -211,7 +223,7 @@ async fn run_pty(
                 web_dir: web_dir(),
                 token: token.clone(),
                 token_in_links: minted,
-                ..server::config::Config::from_env()
+                ..server::config::Config::from_env()?
             };
             // Channel so the server can hand us the bound address.
             let (addr_tx, addr_rx) = tokio::sync::oneshot::channel::<String>();
@@ -411,8 +423,8 @@ fn web_dir() -> String {
             }
         }
     }
-    // Fallback: let Config::from_env() default handle it
-    server::config::Config::from_env().web_dir
+    // Fallback: let the env default handle it
+    server::config::web_dir_from_env()
 }
 
 #[cfg(test)]

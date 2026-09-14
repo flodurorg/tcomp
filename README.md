@@ -75,6 +75,14 @@ Scripts can send `Authorization: Bearer <token>`. Tokens must be URL-safe —
 letters, digits and `-._~` — and the relay refuses to start otherwise.
 `/healthz` and `/static` stay open.
 
+Pass `--token-file` instead of `--token` to keep the secret out of your shell
+history, out of `ps`, and out of the environment every child process inherits —
+point it at a mounted Kubernetes secret, a `systemd` credential, or a `chmod 600`
+file. It is read once at startup and trimmed of the trailing newline `echo`
+leaves behind. Naming both a token and a token file is refused rather than
+silently preferring one, and a token file that cannot be read is fatal, so a
+typo in the path can never start a relay that is wide open.
+
 `src/server/auth.rs` is still the single seam, and what it
 implements is one shared token: access is all-or-nothing, with no per-session
 scope and no separate read-only credential.
@@ -137,6 +145,7 @@ Session flags, each with an environment equivalent:
 | `--name` | `TCOMP_NAME` | label in the web UI (default: hostname) |
 | `--allow-input` | `TCOMP_ALLOW_INPUT` | let the browser type into this terminal |
 | `--token` | `TCOMP_TOKEN` | token to present to the relay |
+| `--token-file` | `TCOMP_TOKEN_FILE` | file to read that token from instead |
 
 Relay parameters, which configure whichever relay is running — the one embedded
 in `standalone` or a separate `tcomp serve`. `standalone` takes the first two as
@@ -147,6 +156,7 @@ flags as well:
 | `--bind` | `TCOMP_BIND` | `127.0.0.1:0` embedded, `0.0.0.0:8080` serving | listen address; a bare IP takes a random port |
 | `--public-url` | `TCOMP_PUBLIC_URL` | the bound address | base URL session links are built from |
 | | `TCOMP_TOKEN` | none for `serve`, minted for `standalone` | token the relay requires; unset leaves `serve` open |
+| | `TCOMP_TOKEN_FILE` | none | file holding that token; a relay that cannot read it refuses to start |
 | | `TCOMP_WEB_DIR` | `web` | directory holding the viewer pages |
 | | `TCOMP_ENDED_TTL` | `60` | seconds a cleanly-exited session is kept |
 | | `TCOMP_STALE_TTL` | `14400` | seconds a disconnected session is kept |
