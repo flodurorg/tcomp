@@ -14,8 +14,8 @@ spec:
   template:
     metadata:
       annotations:
-        {{- if and .Values.auth.token (not .Values.auth.existingSecret) }}
-        checksum/secret: {{ .Values.auth.token | sha256sum }}
+        {{- if and .Values.auth.enabled (not .Values.auth.existingSecret) }}
+        checksum/secret: {{ include "tcomp.authToken" . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -50,7 +50,7 @@ spec:
             - name: TCOMP_PUBLIC_URL
               value: {{ . | quote }}
             {{- end }}
-            {{- if or .Values.auth.token .Values.auth.existingSecret }}
+            {{- if .Values.auth.enabled }}
             - name: TCOMP_TOKEN
               valueFrom:
                 secretKeyRef:

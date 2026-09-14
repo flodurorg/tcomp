@@ -16,10 +16,15 @@ Reach it locally with:
 then open http://localhost:8080 and set publicUrl before exposing it.
 {{- end }}
 
-{{- if not (or .Values.auth.token .Values.auth.existingSecret) }}
+{{- if not .Values.auth.enabled }}
 
-WARNING: no token is set, so anyone who can reach this relay can watch every
-session. Set auth.token or auth.existingSecret.
+WARNING: auth.enabled is false, so anyone who can reach this relay can watch
+every session.
+{{- else if not (or .Values.auth.token .Values.auth.existingSecret) }}
+
+A token was generated for you. Read it with:
+
+  kubectl --namespace {{ .Release.Namespace }} get secret {{ include "tcomp.fullname" . }} -o jsonpath='{.data.token}' | base64 -d
 {{- end }}
 
 {{- if and .Values.ingress.enabled .Values.httpRoute.enabled }}

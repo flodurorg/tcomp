@@ -68,3 +68,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s://%s" .Values.httpRoute.scheme (first .Values.httpRoute.hostnames) }}
 {{- end }}
 {{- end }}
+
+{{- define "tcomp.authToken" -}}
+{{- if not (hasKey . "tcompAuthToken") -}}
+{{- $token := .Values.auth.token -}}
+{{- if not $token -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (include "tcomp.fullname" .) -}}
+{{- if and $existing (hasKey ($existing.data | default dict) "token") -}}
+{{- $token = index $existing.data "token" | b64dec -}}
+{{- else -}}
+{{- $token = randAlphaNum 32 -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set . "tcompAuthToken" $token -}}
+{{- end -}}
+{{- get . "tcompAuthToken" -}}
+{{- end }}

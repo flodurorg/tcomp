@@ -75,6 +75,9 @@ httpRoute:
 publicUrl: ""
 
 auth:
+  # A token is generated when none is set below, and the one already in the
+  # cluster is reused on upgrade. Disable only for a deliberately open relay.
+  enabled: true
   token: ""
   existingSecret: ""
   existingSecretKey: token
