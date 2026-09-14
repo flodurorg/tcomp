@@ -159,7 +159,6 @@
     color: #fff;
   }
   .keybar .modifier { min-width: 70px; }
-  .keybar .modifier[data-modifier] { min-width: 0; padding: 0 12px; }
   .key-mod {
     color: #9aa9bd;
     font-size: 10px;
@@ -193,7 +192,9 @@
 <nav class="keybar" id="keybar" aria-label="Terminal keys" aria-hidden="true">
   <div class="key-group">
     <button class="modifier" type="button" data-modifier="shift" aria-pressed="false">Shift</button>
-    <button class="modifier" type="button" data-modifier="ctrl" aria-pressed="false"><span class="key-mod">Ctrl</span></button>
+    <button class="modifier" type="button" data-modifier="ctrl" aria-pressed="false">Ctrl</button>
+  </div>
+  <div class="key-group">
     <button type="button" data-key="escape" aria-label="Escape">Esc</button>
     <button type="button" data-key="tab">Tab</button>
   </div>
