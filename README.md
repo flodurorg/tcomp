@@ -78,25 +78,28 @@ actually open.
 TCOMP_PUBLIC_URL=https://tcomp.example.com docker compose up -d
 ```
 
-**kubernetes** — the chart in `charts/tcomp` runs one replica, because sessions
-live in memory and are not shared between pods. `image.tag` follows the chart's
-`appVersion`, so a release ships a chart that pins its own image.
+**kubernetes** — the chart in `charts/tcomp-chart` is published to
+`oci://ghcr.io/flodurorg/tcomp/tcomp-chart` and runs one replica, because
+sessions live in memory and are not shared between pods. `image.tag` follows the
+chart's `appVersion`, so a release ships a chart that pins its own image.
 
 ```sh
-helm install tcomp ./charts/tcomp \
+helm install tcomp oci://ghcr.io/flodurorg/tcomp/tcomp-chart \
   --set ingress.enabled=true \
-  --set ingress.hosts[0].host=tcomp.example.com \
-  --set auth.token="$(openssl rand -hex 32)"
+  --set ingress.hosts[0].host=tcomp.example.com
 ```
+
+A token is generated if you do not set one, and reused on upgrade. Read it with
+`kubectl get secret tcomp -o jsonpath='{.data.token}' | base64 -d`, or set
+`auth.token` / `auth.existingSecret` yourself.
 
 Gateway API works instead of an Ingress, and the two are independent:
 
 ```sh
-helm install tcomp ./charts/tcomp \
+helm install tcomp oci://ghcr.io/flodurorg/tcomp/tcomp-chart \
   --set httpRoute.enabled=true \
   --set httpRoute.parentRefs[0].name=my-gateway \
-  --set httpRoute.hostnames[0]=tcomp.example.com \
-  --set auth.token="$(openssl rand -hex 32)"
+  --set httpRoute.hostnames[0]=tcomp.example.com
 ```
 
 `publicUrl` is derived from the first ingress host or `httpRoute` hostname when

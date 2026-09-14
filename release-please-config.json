@@ -63,7 +63,7 @@
       "extra-files": [
         {
           "type": "generic",
-          "path": "charts/tcomp/Chart.yaml"
+          "path": "charts/tcomp-chart/Chart.yaml"
         }
       ]
     }

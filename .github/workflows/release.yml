@@ -221,7 +221,15 @@ jobs:
       - uses: azure/setup-helm@v5
 
       - name: package
-        run: helm package charts/tcomp --destination dist
+        run: helm package charts/tcomp-chart --destination dist
+
+      - name: push
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          helm push dist/tcomp-chart-*.tgz "oci://ghcr.io/${{ github.repository }}"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -257,6 +265,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.setup.outputs.tag }}
           IMAGE: ghcr.io/${{ github.repository }}
+          CHART: ghcr.io/${{ github.repository }}/tcomp-chart
           BASE: ${{ github.server_url }}/${{ github.repository }}/releases/download
         run: |
           version="${TAG#v}"
@@ -273,13 +282,13 @@ jobs:
           \`\`\`sh
           docker pull ${IMAGE}:${version}
 
-          helm install tcomp ${BASE}/${TAG}/tcomp-${version}.tgz
+          helm install tcomp oci://${CHART} --version ${version}
           \`\`\`
 
           | | |
           | --- | --- |
           | container | \`${IMAGE}:${version}\` |
-          | chart | [tcomp-${version}.tgz](${BASE}/${TAG}/tcomp-${version}.tgz) |
+          | chart | \`oci://${CHART}\` · [tcomp-chart-${version}.tgz](${BASE}/${TAG}/tcomp-chart-${version}.tgz) |
           | x86_64 | [tar.gz](${BASE}/${TAG}/tcomp-${TAG}-x86_64-unknown-linux-musl.tar.gz) · [sha256](${BASE}/${TAG}/tcomp-${TAG}-x86_64-unknown-linux-musl.tar.gz.sha256) |
           | aarch64 | [tar.gz](${BASE}/${TAG}/tcomp-${TAG}-aarch64-unknown-linux-musl.tar.gz) · [sha256](${BASE}/${TAG}/tcomp-${TAG}-aarch64-unknown-linux-musl.tar.gz.sha256) |
           EOF
