@@ -61,11 +61,7 @@ pub async fn run(
                             "relay lost the old session — reconnected under a new URL",
                         );
                     }
-                    crate::term::note_with_url(
-                        crate::term::Note::Good,
-                        "watch at",
-                        Some(&ack.url),
-                    );
+                    crate::term::note_with_url(crate::term::Note::Good, "watch at", Some(&ack.url));
                 }
                 session = Some(ack.session);
                 backoff = BACKOFF_MIN;

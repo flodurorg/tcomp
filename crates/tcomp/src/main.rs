@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 #[command(
     name = "tcomp",
     about = "terminal companion — share a terminal session in the browser",
-    args_conflicts_with_subcommands = true,
+    args_conflicts_with_subcommands = true
 )]
 struct Cli {
     #[command(subcommand)]
@@ -79,14 +79,14 @@ fn main() -> Result<()> {
             runtime.block_on(run_serve())?;
             Ok(())
         }
-        Some(Cmd::Standalone { name, token, allow_input, cmd }) => {
-            let code = runtime.block_on(run_pty(
-                cmd,
-                PtyMode::Standalone,
-                name,
-                token,
-                allow_input,
-            ))?;
+        Some(Cmd::Standalone {
+            name,
+            token,
+            allow_input,
+            cmd,
+        }) => {
+            let code =
+                runtime.block_on(run_pty(cmd, PtyMode::Standalone, name, token, allow_input))?;
             term::restore();
             std::process::exit(code);
         }
@@ -97,7 +97,9 @@ fn main() -> Result<()> {
                 eprintln!("       tcomp serve");
                 std::process::exit(1);
             }
-            let relay = cli.relay.or_else(|| std::env::var("TCOMP_RELAY").ok().filter(|s| !s.is_empty()));
+            let relay = cli
+                .relay
+                .or_else(|| std::env::var("TCOMP_RELAY").ok().filter(|s| !s.is_empty()));
             let Some(relay) = relay else {
                 eprintln!("tcomp: --relay or TCOMP_RELAY required (or use `tcomp standalone`)");
                 std::process::exit(1);
@@ -284,7 +286,9 @@ async fn run_pty(
 
     let _ = tokio::time::timeout(
         Duration::from_millis(500),
-        tokio::task::spawn_blocking(move || { let _ = output_done.join(); }),
+        tokio::task::spawn_blocking(move || {
+            let _ = output_done.join();
+        }),
     )
     .await;
 
@@ -305,10 +309,14 @@ fn pump_output(mut reader: Box<dyn Read + Send>, relay: Option<UnboundedSender<E
             Ok(n) => {
                 let chunk = &buf[..n];
                 modes::observe(&mut pending, chunk);
-                if stdout.write_all(chunk).is_err() { break; }
+                if stdout.write_all(chunk).is_err() {
+                    break;
+                }
                 let _ = stdout.flush();
                 if let Some(tx) = &relay {
-                    if tx.send(Event::Output(chunk.to_vec())).is_err() { break; }
+                    if tx.send(Event::Output(chunk.to_vec())).is_err() {
+                        break;
+                    }
                 }
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -323,7 +331,11 @@ fn pump_stdin(writes: std::sync::mpsc::Sender<Vec<u8>>) {
     loop {
         match stdin.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => { if writes.send(buf[..n].to_vec()).is_err() { break; } }
+            Ok(n) => {
+                if writes.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
@@ -332,7 +344,9 @@ fn pump_stdin(writes: std::sync::mpsc::Sender<Vec<u8>>) {
 
 fn pump_writes(mut writer: Box<dyn Write + Send>, writes: std::sync::mpsc::Receiver<Vec<u8>>) {
     while let Ok(chunk) = writes.recv() {
-        if writer.write_all(&chunk).is_err() { break; }
+        if writer.write_all(&chunk).is_err() {
+            break;
+        }
         let _ = writer.flush();
     }
 }

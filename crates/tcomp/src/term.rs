@@ -61,8 +61,6 @@ pub enum Note {
     Warn,
 }
 
-
-
 pub fn restore() {
     if RAW_ACTIVE.swap(false, Ordering::SeqCst) {
         use std::io::Write;

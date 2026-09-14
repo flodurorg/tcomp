@@ -57,7 +57,11 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
         "{} · {}{}",
         hello.name,
         hello.cmd,
-        if hello.input { " · accepting input" } else { "" }
+        if hello.input {
+            " · accepting input"
+        } else {
+            ""
+        }
     ));
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
