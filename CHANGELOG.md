@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.5.0](https://github.com/flodurorg/tcomp/compare/v0.4.0...v0.5.0) (2026-09-14)
+
+
+### Features
+
+* **terminal:** count down restart timeout ([13181b0](https://github.com/flodurorg/tcomp/commit/13181b0bb597a4ed5696835fb9c19a2b3caf17f7))
+* **terminal:** keep watch links readable before full-screen apps ([208aa32](https://github.com/flodurorg/tcomp/commit/208aa32a9b7469927cd8f82d3d18c5cdf08d86b8))
+* **terminal:** offer a restart when the wrapped command exits ([5245151](https://github.com/flodurorg/tcomp/commit/5245151b3eb7d0bb37237a49a90b919648fbcb7d))
+* **terminal:** report title and working directory ([c3819ec](https://github.com/flodurorg/tcomp/commit/c3819ec55cd6ca7c063b169bacec8b10f6f0b16c))
+* **web:** add terminal layout choices ([0c95f75](https://github.com/flodurorg/tcomp/commit/0c95f75c22651fd10fd35f83882804d71c38af47))
+* **web:** improve onscreen terminal keyboard ([6bd9193](https://github.com/flodurorg/tcomp/commit/6bd9193c33513117ec7d7e66e658372e4b2606c3))
+
+
+### Bug Fixes
+
+* **relay:** mark a session stale when its producer goes silent ([516ba56](https://github.com/flodurorg/tcomp/commit/516ba5657aec7507200af05c458fb0e8305938d8))
+* **terminal:** simplify restart prompt ([31ec9ee](https://github.com/flodurorg/tcomp/commit/31ec9eebdbf8ca18e3936e8f5370931e12cc3b58))
+* **web:** make ctrl a sticky modifier key ([2aa0a02](https://github.com/flodurorg/tcomp/commit/2aa0a021e7b754d8aac93e5e90a14903e1c7e37a))
+* **web:** make shift a keyboard modifier ([ca416f1](https://github.com/flodurorg/tcomp/commit/ca416f1c473abad0d22aa6bfd8d0cc856812ac9b))
+* **web:** style better ([026312a](https://github.com/flodurorg/tcomp/commit/026312a2221646fe2c3eb24aaf269114e47facb1))
+* **web:** style ctrl combos as modifiers ([eba6211](https://github.com/flodurorg/tcomp/commit/eba621178ad440ea18d03e2d01cf6fee0c015b30))
+
+
+### Documentation
+
+* document taking over an existing terminal ([49fe7fd](https://github.com/flodurorg/tcomp/commit/49fe7fda350d316945c2bc955e89c10f279c6d4e))
+
 ## [0.4.0](https://github.com/flodurorg/tcomp/compare/v0.3.1...v0.4.0) (2026-09-14)
 
 
