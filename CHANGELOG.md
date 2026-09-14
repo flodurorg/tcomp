@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/flodurorg/tcomp/compare/v0.2.0...v0.3.0) (2026-09-14)
+
+
+### Features
+
+* **chart:** add a Helm chart that tracks the release version ([197d86b](https://github.com/flodurorg/tcomp/commit/197d86bf526eedf7a90264bd4484d1779beda404))
+* **chart:** generate a relay token when none is given ([72e320f](https://github.com/flodurorg/tcomp/commit/72e320f62a06c1105949bcfc1c6b5ba8616fcfa0))
+* **chart:** route through the Gateway API as well as an Ingress ([4ab2f0a](https://github.com/flodurorg/tcomp/commit/4ab2f0aa99e8cab6b679318ae50cafe8a93f595a))
+* **ci:** link the image, chart and binaries from the release notes ([66713c2](https://github.com/flodurorg/tcomp/commit/66713c2dcb091c5b7c8c6925e4658bdfaeb7b66f))
+* **ci:** publish the chart to ghcr next to the image ([7b11625](https://github.com/flodurorg/tcomp/commit/7b116250a57eaf6f2236f13ca488a72a6dc219fd))
+
+
+### Bug Fixes
+
+* **chart:** stop passing serve twice to the container ([0cda3ea](https://github.com/flodurorg/tcomp/commit/0cda3ea9f5e0a1ede52dc6827bf5a004bb6e70d0))
+
 ## [0.2.0](https://github.com/flodurorg/tcomp/compare/v0.1.0...v0.2.0) (2026-09-14)
 
 
