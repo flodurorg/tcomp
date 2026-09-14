@@ -4,6 +4,7 @@ pub mod produce;
 pub mod session;
 pub mod view;
 
+use anyhow::Context;
 use auth::{authorize, Access};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -25,9 +26,11 @@ pub struct App {
 /// Start the relay server. Resolves once the server stops (signal or error).
 /// `on_ready` is called with the bound address just before accepting connections.
 pub async fn serve(mut config: Config, on_ready: impl FnOnce(&str)) -> anyhow::Result<()> {
-    // Bind first: standalone mode asks for port 0 and needs the real port to
+    // Bind first: standalone may ask for port 0 and needs the bound address to
     // build public_url, which the router captures via App state.
-    let listener = tokio::net::TcpListener::bind(&config.bind).await?;
+    let listener = tokio::net::TcpListener::bind(&config.bind)
+        .await
+        .with_context(|| format!("cannot bind {}", config.bind))?;
     let bound = listener.local_addr()?.to_string();
     if config.public_url.is_empty() {
         config.public_url = format!("http://{bound}");

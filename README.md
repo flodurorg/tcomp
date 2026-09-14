@@ -14,12 +14,13 @@ One binary, three modes:
 
 | Mode | Command | Use |
 | --- | --- | --- |
-| standalone | `tcomp standalone -- <cmd>` | embedded relay on a random loopback port; nothing to deploy |
+| standalone | `tcomp standalone -- <cmd>` | embedded relay, loopback by default or `--bind` an address; nothing to deploy |
 | client | `tcomp --relay URL -- <cmd>` | connect to a relay someone else is running |
 | server | `tcomp serve` | be that relay (this is what the Docker image runs) |
 
-**No inbound port is opened on the workstation.** The wrapper dials *out* to the
-relay, so it works behind NAT, on a customer network, or on someone else's VPN.
+**Client mode opens no inbound port on the workstation.** The wrapper dials *out*
+to the relay, so it works behind NAT, on a customer network, or on someone
+else's VPN.
 
 ## Security
 
@@ -38,8 +39,9 @@ until auth lands. `crates/tcomp/src/server/auth.rs` is the single seam: it is
 called on the index, on `/s/<id>`, on `/ws/produce`, and separately for write
 access, so read-only and read-write can be gated independently.
 
-`tcomp standalone` binds loopback only, so it is reachable from your machine
-until you deliberately expose it (a tunnel, an SSH forward, a wider bind).
+`tcomp standalone` binds loopback by default, so it is reachable only from your
+machine until you deliberately widen it — `--bind` (see Tailscale), a tunnel, an
+SSH forward. Everything above applies the moment you do.
 
 ## Layout
 
@@ -87,7 +89,7 @@ rebuild — reload the page. Rust changes need `--build`.
 
 ```
 tcomp --relay URL [--name NAME] [--token TOKEN] [--allow-input] -- <command>...
-tcomp standalone   [--name NAME] [--token TOKEN] [--allow-input] -- <command>...
+tcomp standalone   [--name NAME] [--token TOKEN] [--allow-input] [--bind ADDR] -- <command>...
 ```
 
 | Flag | Env | Meaning |
@@ -96,6 +98,7 @@ tcomp standalone   [--name NAME] [--token TOKEN] [--allow-input] -- <command>...
 | `--name` | `TCOMP_NAME` | label in the web UI (default: hostname) |
 | `--token` | `TCOMP_TOKEN` | sent in the hello frame; ignored in v1 |
 | `--allow-input` | `TCOMP_ALLOW_INPUT` | let the web view type into this terminal (see Security) |
+| `--bind` | `TCOMP_BIND` | `standalone` only: address the embedded relay listens on (default `127.0.0.1:0`); a bare IP takes a random port |
 
 The child's exit code is the wrapper's exit code. If the connection drops the
 client reconnects with exponential backoff and resumes the same session. If the
@@ -109,10 +112,25 @@ terminal and plain otherwise, honouring `NO_COLOR` and `TERM=dumb`.
 ## Tailscale
 
 `tcomp standalone` binds `127.0.0.1` on a random port, so nothing off the machine
-can reach it. `tailscale serve` puts it on your tailnet without opening one: it
-terminates TLS at the tailnet edge and proxies to loopback.
+can reach it. `--bind` (env `TCOMP_BIND`) changes that address; a bare IP takes a
+random port, the way the default does.
 
-Start the session, then publish the port it printed:
+```sh
+tcomp standalone --bind "$(tailscale ip -4)" -- claude
+# tcomp: watch at http://100.101.102.103:41157/s/4652bec6…
+```
+
+The URL it prints is the one to open from anywhere else on the tailnet: the
+address you bound is the address in the URL, so there is nothing to rewrite. Give
+it a port — `--bind 100.101.102.103:8080` — to get the same URL on every run.
+
+Do not bind a wildcard. `--bind 0.0.0.0:8080` listens on every interface rather
+than only the tailnet one, and the URL comes out as `http://0.0.0.0:8080/s/…`,
+which is not a link anyone can open.
+
+That traffic rides the tailnet's WireGuard tunnel but is itself plain HTTP.
+`tailscale serve` is the other route: leave the relay on loopback and proxy to
+it, for a stable `<machine>.<tailnet>.ts.net` name and real TLS.
 
 ```sh
 tcomp standalone -- claude     # tcomp: watch at http://127.0.0.1:45955/s/4652bec6…
@@ -122,30 +140,23 @@ tailscale serve --bg 45955     # from another shell
 Open `https://<machine>.<tailnet>.ts.net/s/4652bec6…` — same path, tailnet host
 instead of `127.0.0.1`. The viewer builds its links and its websocket from
 whatever address you loaded it on, so the proxied host needs no configuration;
-only the URL tcomp prints on stderr is the loopback one. This needs HTTPS
-enabled for the tailnet; without it, `tailscale serve --bg --http=80 45955` and
-plain `http://` works the same way.
+only the URL tcomp prints on stderr is the loopback one. This needs HTTPS enabled
+for the tailnet; without it, `tailscale serve --bg --http=80 45955` serves plain
+`http://` the same way. `tailscale serve status` shows what is published,
+`tailscale serve reset` takes it back down.
 
-`tailscale serve status` shows what is published, `tailscale serve reset` takes
-it back down.
-
-The port is new on every run, and `TCOMP_BIND` does not apply to `standalone`.
-For an address that outlives a single command, run the relay yourself on a fixed
-port and attach to it as a client instead:
+For one URL covering many sessions, run the relay yourself and attach to it as a
+client instead:
 
 ```sh
-TCOMP_BIND=127.0.0.1:8080 TCOMP_PUBLIC_URL=https://<machine>.<tailnet>.ts.net tcomp serve
-tailscale serve --bg 8080
+TCOMP_BIND=100.101.102.103:8080 TCOMP_PUBLIC_URL=http://100.101.102.103:8080 tcomp serve
 tcomp --relay http://localhost:8080 -- claude
 ```
 
-Now the URL tcomp prints is already the tailnet one, and every session lands on
-the same host.
-
 A tailnet is not an audience of one: everyone on it reaches every session, and
-`--allow-input` hands them all a shell — see Security, and narrow it with ACLs
-if the tailnet is shared. Do not reach for `tailscale funnel`; that publishes to
-the open internet, where an unauthenticated terminal feed is as bad as it sounds.
+`--allow-input` hands them all a shell — see Security, and narrow it with ACLs if
+the tailnet is shared. Do not reach for `tailscale funnel`; that publishes to the
+open internet, where an unauthenticated terminal feed is as bad as it sounds.
 
 ## Relay
 

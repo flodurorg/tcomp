@@ -57,6 +57,10 @@ enum Cmd {
         #[arg(long, env = "TCOMP_ALLOW_INPUT")]
         allow_input: bool,
 
+        /// Address the embedded relay listens on; a bare IP gets a random port
+        #[arg(long, env = "TCOMP_BIND")]
+        bind: Option<String>,
+
         #[arg(last = true, required = true)]
         cmd: Vec<String>,
     },
@@ -83,10 +87,13 @@ fn main() -> Result<()> {
             name,
             token,
             allow_input,
+            bind,
             cmd,
         }) => {
-            let code =
-                runtime.block_on(run_pty(cmd, PtyMode::Standalone, name, token, allow_input))?;
+            let mode = PtyMode::Standalone {
+                bind: listen_addr(bind),
+            };
+            let code = runtime.block_on(run_pty(cmd, mode, name, token, allow_input))?;
             term::restore();
             std::process::exit(code);
         }
@@ -118,8 +125,8 @@ fn main() -> Result<()> {
 }
 
 enum PtyMode {
-    /// Spin up an embedded relay on a random local port, print the URL, then connect.
-    Standalone,
+    /// Spin up an embedded relay on `bind`, print the URL, then connect.
+    Standalone { bind: String },
     /// Connect to an externally-running relay.
     Remote { relay: String },
 }
@@ -182,10 +189,10 @@ async fn run_pty(
     // Resolve the relay URL — for Standalone, start an embedded server first.
     let relay_url: Option<String> = match mode {
         PtyMode::Remote { relay } => Some(relay),
-        PtyMode::Standalone => {
+        PtyMode::Standalone { bind } => {
             // Bind on a random port, start relay in background.
             let cfg = server::config::Config {
-                bind: "127.0.0.1:0".into(),
+                bind,
                 public_url: String::new(), // filled in after bind
                 web_dir: web_dir(),
                 ..server::config::Config::from_env()
@@ -359,6 +366,16 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+fn listen_addr(bind: Option<String>) -> String {
+    let Some(bind) = bind.map(|b| b.trim().to_string()).filter(|b| !b.is_empty()) else {
+        return "127.0.0.1:0".into();
+    };
+    match bind.parse::<std::net::IpAddr>() {
+        Ok(ip) => std::net::SocketAddr::new(ip, 0).to_string(),
+        Err(_) => bind,
+    }
+}
+
 /// Locate the web directory relative to the binary or cwd.
 fn web_dir() -> String {
     // Running from the repo root (dev): use ./web
@@ -376,4 +393,30 @@ fn web_dir() -> String {
     }
     // Fallback: let Config::from_env() default handle it
     server::config::Config::from_env().web_dir
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listen_addr;
+
+    #[test]
+    fn defaults_to_loopback_on_a_random_port() {
+        assert_eq!(listen_addr(None), "127.0.0.1:0");
+        assert_eq!(listen_addr(Some("   ".into())), "127.0.0.1:0");
+    }
+
+    #[test]
+    fn bare_ip_gets_a_random_port() {
+        assert_eq!(listen_addr(Some("100.101.102.103".into())), "100.101.102.103:0");
+        assert_eq!(listen_addr(Some("fd7a::1".into())), "[fd7a::1]:0");
+    }
+
+    #[test]
+    fn explicit_port_is_kept() {
+        assert_eq!(
+            listen_addr(Some("100.101.102.103:8080".into())),
+            "100.101.102.103:8080"
+        );
+        assert_eq!(listen_addr(Some("[fd7a::1]:8080".into())), "[fd7a::1]:8080");
+    }
 }
