@@ -36,6 +36,26 @@ would not hand a shell to.
 tcomp standalone --allow-input -- claude
 ```
 
+## Installing
+
+**nix** — the flake exposes the binary as `packages.default` and carries `web/`
+along with it, so the viewer is served wherever you run it from.
+
+```sh
+nix run github:flodurorg/tcomp -- standalone -- claude
+```
+
+On NixOS, take the flake as an input and put the package on the system:
+
+```nix
+inputs.tcomp.url = "github:flodurorg/tcomp";
+inputs.tcomp.inputs.nixpkgs.follows = "nixpkgs";
+
+environment.systemPackages = [
+  inputs.tcomp.packages.${pkgs.stdenv.hostPlatform.system}.default
+];
+```
+
 ## Security
 
 **A relay is only as private as its token.** Anyone holding it sees everything
