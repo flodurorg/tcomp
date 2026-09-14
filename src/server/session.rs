@@ -347,8 +347,47 @@ fn preview(vt: &avt::Vt) -> String {
 
 fn dump_bytes(vt: &avt::Vt) -> Bytes {
     let mut out = Vec::from(RESET);
-    out.extend_from_slice(vt.dump().as_bytes());
+    out.extend_from_slice(normalize_sgr(&vt.dump()).as_bytes());
     Bytes::from(out)
+}
+
+fn normalize_sgr(dump: &str) -> String {
+    let mut out = String::with_capacity(dump.len());
+    let mut rest = dump;
+    while let Some(start) = rest.find("\x1b[") {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 2..];
+        let Some(end) = tail.find(|c: char| ('\u{40}'..='\u{7e}').contains(&c)) else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        out.push_str("\x1b[");
+        if &tail[end..end + 1] == "m" {
+            out.push_str(&normalize_sgr_params(&tail[..end]));
+        } else {
+            out.push_str(&tail[..end]);
+        }
+        out.push_str(&tail[end..end + 1]);
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn normalize_sgr_params(params: &str) -> String {
+    params
+        .split(';')
+        .map(|param| {
+            let parts: Vec<&str> = param.split(':').collect();
+            match parts.as_slice() {
+                ["38" | "48" | "58", "2", _, _, _] | ["38" | "48" | "58", "5", _] => {
+                    parts.join(";")
+                }
+                _ => param.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 fn unix(t: SystemTime) -> u64 {
@@ -649,6 +688,26 @@ mod tests {
             replayed.iter().any(|line| line.contains(&expected)),
             "resync dump should show the current screen, got {replayed:?}"
         );
+    }
+
+    #[test]
+    fn dump_rewrites_colour_params_to_the_semicolon_form() {
+        let session = session();
+        session.feed(Bytes::from_static(b"\x1b[38;2;10;20;30m\x1b[48;5;99mhi"));
+        let dump = String::from_utf8(session.dump().to_vec()).unwrap();
+
+        assert!(dump.contains("38;2;10;20;30"), "got {dump:?}");
+        assert!(dump.contains("48;5;99"), "got {dump:?}");
+        assert!(!dump.contains(':'), "got {dump:?}");
+    }
+
+    #[test]
+    fn dump_leaves_screen_text_that_looks_like_a_colour_param_alone() {
+        let session = session();
+        session.feed(Bytes::from_static(b"38:2:1:2:3"));
+        let dump = String::from_utf8(session.dump().to_vec()).unwrap();
+
+        assert!(dump.contains("38:2:1:2:3"), "got {dump:?}");
     }
 
     fn interactive() -> Session {
