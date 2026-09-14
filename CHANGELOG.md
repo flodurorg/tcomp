@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/flodurorg/tcomp/compare/v0.3.1...v0.4.0) (2026-09-14)
+
+
+### Features
+
+* **auth:** read the relay token from a file ([60e3464](https://github.com/flodurorg/tcomp/commit/60e3464bda9d2593dc918cb0fad9ac1d5a321c94))
+* **nix:** install tcomp straight from the flake ([645e4e6](https://github.com/flodurorg/tcomp/commit/645e4e6d2e26ed2786d65d41f5d80857c1128eac))
+
+
+### Bug Fixes
+
+* **relay:** install a rustls provider before dialling a relay ([150975e](https://github.com/flodurorg/tcomp/commit/150975ebaa46e0cc8765f77af92a1000c7fe0a5e))
+
 ## [0.3.1](https://github.com/flodurorg/tcomp/compare/v0.3.0...v0.3.1) (2026-09-14)
 
 
