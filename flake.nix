@@ -29,6 +29,21 @@
             gifsicle
           ];
           RUST_BACKTRACE = "1";
+
+          shellHook = ''
+            if [ -t 1 ]; then
+              echo "tcomp dev shell"
+              echo
+              echo "  cargo build                                build the binary"
+              echo "  cargo test                                 run the tests"
+              echo "  cargo clippy --all-targets -- -D warnings  lint"
+              echo "  cargo fmt                                  format"
+              echo "  cargo run -p tcomp -- standalone -- htop   try it locally"
+              echo "  nix build                                  build the package"
+              echo "  docs/record-demo.sh                        regenerate the demo GIF"
+              echo
+            fi
+          '';
         };
       });
 }
