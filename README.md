@@ -152,6 +152,7 @@ Session flags, each with an environment equivalent:
 | `--relay` | `TCOMP_RELAY` | relay base URL; required unless `standalone` |
 | `--name` | `TCOMP_NAME` | label in the web UI (default: hostname) |
 | `--allow-input` | `TCOMP_ALLOW_INPUT` | let the browser type into this terminal |
+| `--exit-on-end` | `TCOMP_EXIT_ON_END` | exit when the command exits, instead of offering a restart |
 | `--token` | `TCOMP_TOKEN` | token to present to the relay |
 | `--token-file` | `TCOMP_TOKEN_FILE` | file to read that token from instead |
 

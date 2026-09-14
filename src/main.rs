@@ -5,8 +5,8 @@ mod term;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use std::io::{ErrorKind, Read, Write};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use std::io::{ErrorKind, IsTerminal, Read, Write};
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc::UnboundedSender;
@@ -42,6 +42,10 @@ struct Cli {
     #[arg(long, env = "TCOMP_ALLOW_INPUT", global = true)]
     allow_input: bool,
 
+    /// Exit when the command exits instead of offering to restart it
+    #[arg(long, env = "TCOMP_EXIT_ON_END", global = true)]
+    exit_on_end: bool,
+
     #[arg(last = true)]
     cmd: Vec<String>,
 }
@@ -67,6 +71,10 @@ enum Cmd {
         /// Let the web view type into this terminal
         #[arg(long, env = "TCOMP_ALLOW_INPUT")]
         allow_input: bool,
+
+        /// Exit when the command exits instead of offering to restart it
+        #[arg(long, env = "TCOMP_EXIT_ON_END")]
+        exit_on_end: bool,
 
         /// Address the embedded relay listens on; a bare IP gets a random port
         #[arg(long, env = "TCOMP_BIND")]
@@ -107,6 +115,7 @@ fn main() -> Result<()> {
             token,
             token_file,
             allow_input,
+            exit_on_end,
             bind,
             public_url,
             cmd,
@@ -116,7 +125,8 @@ fn main() -> Result<()> {
                 bind: listen_addr(bind),
                 public_url: server::config::normalize_public_url(&public_url.unwrap_or_default()),
             };
-            let code = runtime.block_on(run_pty(cmd, mode, name, token, allow_input))?;
+            let code =
+                runtime.block_on(run_pty(cmd, mode, name, token, allow_input, exit_on_end))?;
             term::restore();
             std::process::exit(code);
         }
@@ -141,6 +151,7 @@ fn main() -> Result<()> {
                 cli.name,
                 token,
                 cli.allow_input,
+                cli.exit_on_end,
             ))?;
             term::restore();
             std::process::exit(code);
@@ -170,15 +181,21 @@ async fn run_serve() -> Result<()> {
     .await
 }
 
-async fn run_pty(
-    command: Vec<String>,
-    mode: PtyMode,
-    name: Option<String>,
-    token: Option<String>,
-    allow_input: bool,
-) -> Result<i32> {
-    let (cols, rows) = term::size();
+const NOTE_HOLD: Duration = Duration::from_millis(500);
 
+struct Shell {
+    master: Box<dyn MasterPty + Send>,
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn Child + Send + Sync>,
+}
+
+fn spawn_shell(
+    command: &[String],
+    cwd: Option<&std::path::Path>,
+    cols: u16,
+    rows: u16,
+) -> Result<Shell> {
     let pair = native_pty_system().openpty(PtySize {
         rows,
         cols,
@@ -190,21 +207,85 @@ async fn run_pty(
     for arg in &command[1..] {
         builder.arg(arg);
     }
-    let cwd = std::env::current_dir().ok();
-    if let Some(cwd) = &cwd {
+    if let Some(cwd) = cwd {
         builder.cwd(cwd);
     }
     builder.env("TCOMP", "1");
 
-    let mut child = pair
+    let child = pair
         .slave
         .spawn_command(builder)
         .with_context(|| format!("failed to spawn {}", command[0]))?;
     drop(pair.slave);
 
-    let master = pair.master;
-    let reader = master.try_clone_reader()?;
-    let writer = master.take_writer()?;
+    let reader = pair.master.try_clone_reader()?;
+    let writer = pair.master.take_writer()?;
+    Ok(Shell {
+        master: pair.master,
+        reader,
+        writer,
+        child,
+    })
+}
+
+/// Where keystrokes go: the live shell, or the restart prompt between shells.
+enum Sink {
+    Pty(Box<dyn Write + Send>),
+    Prompt(UnboundedSender<Vec<u8>>),
+    Closed,
+}
+
+struct Input(std::sync::Mutex<Sink>);
+
+impl Input {
+    fn new(writer: Box<dyn Write + Send>) -> Self {
+        Input(std::sync::Mutex::new(Sink::Pty(writer)))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Sink> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn attach(&self, writer: Box<dyn Write + Send>) {
+        *self.lock() = Sink::Pty(writer);
+    }
+
+    fn keys(&self) -> tokio::sync::mpsc::UnboundedReceiver<Vec<u8>> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.lock() = Sink::Prompt(tx);
+        rx
+    }
+
+    fn deliver(&self, chunk: Vec<u8>) {
+        let mut sink = self.lock();
+        match &mut *sink {
+            Sink::Pty(writer) => {
+                if writer.write_all(&chunk).is_err() {
+                    *sink = Sink::Closed;
+                    return;
+                }
+                let _ = writer.flush();
+            }
+            Sink::Prompt(keys) => {
+                let _ = keys.send(chunk);
+            }
+            Sink::Closed => {}
+        }
+    }
+}
+
+async fn run_pty(
+    command: Vec<String>,
+    mode: PtyMode,
+    name: Option<String>,
+    token: Option<String>,
+    allow_input: bool,
+    exit_on_end: bool,
+) -> Result<i32> {
+    let (cols, rows) = term::size();
+    let cwd = std::env::current_dir().ok();
+
+    let shell = spawn_shell(&command, cwd.as_deref(), cols, rows)?;
 
     let _raw = term::RawGuard::new()?;
 
@@ -268,7 +349,7 @@ async fn run_pty(
                 relay: url,
                 name: name.unwrap_or_else(hostname),
                 cmd: command.join(" "),
-                cwd: cwd.map(|path| path.display().to_string()),
+                cwd: cwd.as_ref().map(|path| path.display().to_string()),
                 token,
                 cols,
                 rows,
@@ -283,55 +364,127 @@ async fn run_pty(
         }),
     };
 
+    // Child output is held back until the watch URL prints, or this fires.
+    tokio::spawn(async {
+        tokio::time::sleep(NOTE_HOLD).await;
+        term::release_output();
+    });
+
+    let input = std::sync::Arc::new(Input::new(shell.writer));
     let stdin_tx = writes_tx.clone();
-    let output_done = std::thread::spawn(move || pump_output(reader, relay_tx));
-    std::thread::spawn(move || pump_writes(writer, writes_rx));
+    std::thread::spawn({
+        let input = input.clone();
+        move || pump_writes(&input, writes_rx)
+    });
     std::thread::spawn(move || pump_stdin(stdin_tx));
 
-    let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
-    let killer = child.clone_killer();
-    std::thread::spawn(move || {
-        let _ = exit_tx.send(child.wait());
-    });
+    let mut master = shell.master;
+    let mut killer = shell.child.clone_killer();
+    let mut exit_rx = wait_for(shell.child);
+    let mut output_done = Some(std::thread::spawn({
+        let relay_tx = relay_tx.clone();
+        move || pump_output(shell.reader, relay_tx)
+    }));
 
     let mut winch = signal(SignalKind::window_change())?;
     let mut term_sig = signal(SignalKind::terminate())?;
     let mut hup_sig = signal(SignalKind::hangup())?;
 
-    let code = loop {
-        tokio::select! {
-            _ = winch.recv() => {
-                let (c, r) = term::size();
-                let _ = master.resize(PtySize { rows: r, cols: c, pixel_width: 0, pixel_height: 0 });
-                let _ = events_tx.send(Event::Resize { cols: c, rows: r });
+    let code = 'session: loop {
+        let code = loop {
+            tokio::select! {
+                _ = winch.recv() => {
+                    let (c, r) = term::size();
+                    let _ = master.resize(PtySize { rows: r, cols: c, pixel_width: 0, pixel_height: 0 });
+                    let _ = events_tx.send(Event::Resize { cols: c, rows: r });
+                }
+                _ = term_sig.recv() => {
+                    let _ = killer.kill();
+                    break 'session 143;
+                }
+                _ = hup_sig.recv() => {
+                    let _ = killer.kill();
+                    break 'session 129;
+                }
+                status = &mut exit_rx => {
+                    break status
+                        .ok()
+                        .and_then(|s| s.ok())
+                        .map(|s| s.exit_code() as i32)
+                        .unwrap_or(1);
+                }
             }
-            _ = term_sig.recv() => {
-                let mut k = killer;
-                let _ = k.kill();
-                break 143;
-            }
-            _ = hup_sig.recv() => {
-                let mut k = killer;
-                let _ = k.kill();
-                break 129;
-            }
-            status = &mut exit_rx => {
-                break status
-                    .ok()
-                    .and_then(|s| s.ok())
-                    .map(|s| s.exit_code() as i32)
-                    .unwrap_or(1);
+        };
+
+        if let Some(handle) = output_done.take() {
+            drain_output(handle).await;
+        }
+        term::release_output();
+
+        if exit_on_end || !std::io::stdin().is_terminal() {
+            break code;
+        }
+
+        announce(
+            &relay_tx,
+            &format!(
+                "{} exited ({code}) — press r to restart, q to quit",
+                program(&command[0])
+            ),
+        );
+        let mut keys = input.keys();
+        'ask: loop {
+            tokio::select! {
+                _ = winch.recv() => {
+                    let (c, r) = term::size();
+                    let _ = events_tx.send(Event::Resize { cols: c, rows: r });
+                }
+                _ = term_sig.recv() => break 'session 143,
+                _ = hup_sig.recv() => break 'session 129,
+                chunk = keys.recv() => {
+                    let Some(chunk) = chunk else { break 'session code };
+                    for key in chunk {
+                        match key {
+                            b'r' | b'R' => break 'ask,
+                            b'q' | b'Q' | 0x03 | 0x04 => break 'session code,
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
+
+        let (c, r) = term::size();
+        let shell = match spawn_shell(&command, cwd.as_deref(), c, r) {
+            Ok(shell) => shell,
+            Err(error) => {
+                term::note(term::Note::Warn, &format!("restart failed: {error}"));
+                break code;
+            }
+        };
+
+        let reset = modes::cleanup();
+        if !reset.is_empty() {
+            let _ = term::child_output(&reset);
+            if let Some(tx) = &relay_tx {
+                let _ = tx.send(Event::Output(reset));
+            }
+        }
+
+        input.attach(shell.writer);
+        master = shell.master;
+        killer = shell.child.clone_killer();
+        exit_rx = wait_for(shell.child);
+        output_done = Some(std::thread::spawn({
+            let relay_tx = relay_tx.clone();
+            move || pump_output(shell.reader, relay_tx)
+        }));
+        let _ = events_tx.send(Event::Resize { cols: c, rows: r });
     };
 
-    let _ = tokio::time::timeout(
-        Duration::from_millis(500),
-        tokio::task::spawn_blocking(move || {
-            let _ = output_done.join();
-        }),
-    )
-    .await;
+    if let Some(handle) = output_done.take() {
+        drain_output(handle).await;
+    }
 
     let _ = events_tx.send(Event::Exit { code });
     drop(events_tx);
@@ -340,8 +493,43 @@ async fn run_pty(
     Ok(code)
 }
 
+fn program(path: &str) -> &str {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+}
+
+fn wait_for(
+    mut child: Box<dyn Child + Send + Sync>,
+) -> tokio::sync::oneshot::Receiver<std::io::Result<portable_pty::ExitStatus>> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait());
+    });
+    rx
+}
+
+async fn drain_output(handle: std::thread::JoinHandle<()>) {
+    let _ = tokio::time::timeout(
+        Duration::from_millis(500),
+        tokio::task::spawn_blocking(move || {
+            let _ = handle.join();
+        }),
+    )
+    .await;
+}
+
+/// Say the same thing on the local terminal and in every viewer.
+fn announce(relay: &Option<UnboundedSender<Event>>, body: &str) {
+    term::note(term::Note::Warn, body);
+    if let Some(tx) = relay {
+        let line = term::styled_line(term::Note::Warn, body);
+        let _ = tx.send(Event::Output(line.into_bytes()));
+    }
+}
+
 fn pump_output(mut reader: Box<dyn Read + Send>, relay: Option<UnboundedSender<Event>>) {
-    let mut stdout = std::io::stdout();
     let mut buf = [0u8; 16384];
     let mut pending = Vec::new();
     let mut reported = modes::Seen::default();
@@ -351,10 +539,9 @@ fn pump_output(mut reader: Box<dyn Read + Send>, relay: Option<UnboundedSender<E
             Ok(n) => {
                 let chunk = &buf[..n];
                 let seen = modes::observe(&mut pending, chunk);
-                if stdout.write_all(chunk).is_err() {
+                if term::child_output(chunk).is_err() {
                     break;
                 }
-                let _ = stdout.flush();
                 if let Some(tx) = &relay {
                     if tx.send(Event::Output(chunk.to_vec())).is_err() {
                         break;
@@ -390,12 +577,9 @@ fn pump_stdin(writes: std::sync::mpsc::Sender<Vec<u8>>) {
     }
 }
 
-fn pump_writes(mut writer: Box<dyn Write + Send>, writes: std::sync::mpsc::Receiver<Vec<u8>>) {
+fn pump_writes(input: &Input, writes: std::sync::mpsc::Receiver<Vec<u8>>) {
     while let Ok(chunk) = writes.recv() {
-        if writer.write_all(&chunk).is_err() {
-            break;
-        }
-        let _ = writer.flush();
+        input.deliver(chunk);
     }
 }
 
@@ -455,7 +639,14 @@ fn web_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::listen_addr;
+    use super::{listen_addr, program};
+
+    #[test]
+    fn the_restart_prompt_names_the_command_not_its_path() {
+        assert_eq!(program("/usr/bin/bash"), "bash");
+        assert_eq!(program("bash"), "bash");
+        assert_eq!(program(""), "");
+    }
 
     #[test]
     fn defaults_to_loopback_on_a_random_port() {
