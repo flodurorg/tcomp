@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/flodurorg/tcomp/compare/v0.3.0...v0.3.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **ci:** publish the chart only once the image is pushed ([d7c54cf](https://github.com/flodurorg/tcomp/commit/d7c54cfb3f98056c2113020d565a9736f1f69f72))
+
 ## [0.3.0](https://github.com/flodurorg/tcomp/compare/v0.2.0...v0.3.0) (2026-09-14)
 
 
