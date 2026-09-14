@@ -2,6 +2,7 @@ FROM rust:1.98-slim AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY src ./src
 RUN cargo build --release --locked -p tcomp
 
 FROM debian:trixie-slim

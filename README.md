@@ -55,7 +55,7 @@ Scripts can send `Authorization: Bearer <token>`. Tokens must be URL-safe —
 letters, digits and `-._~` — and the relay refuses to start otherwise.
 `/healthz` and `/static` stay open.
 
-`crates/tcomp/src/server/auth.rs` is still the single seam, and what it
+`src/server/auth.rs` is still the single seam, and what it
 implements is one shared token: access is all-or-nothing, with no per-session
 scope and no separate read-only credential.
 
