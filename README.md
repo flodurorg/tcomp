@@ -89,7 +89,8 @@ rebuild — reload the page. Rust changes need `--build`.
 
 ```
 tcomp --relay URL [--name NAME] [--token TOKEN] [--allow-input] -- <command>...
-tcomp standalone   [--name NAME] [--token TOKEN] [--allow-input] [--bind ADDR] -- <command>...
+tcomp standalone   [--name NAME] [--token TOKEN] [--allow-input] [--bind ADDR]
+                   [--public-url URL] -- <command>...
 ```
 
 | Flag | Env | Meaning |
@@ -99,6 +100,7 @@ tcomp standalone   [--name NAME] [--token TOKEN] [--allow-input] [--bind ADDR] -
 | `--token` | `TCOMP_TOKEN` | sent in the hello frame; ignored in v1 |
 | `--allow-input` | `TCOMP_ALLOW_INPUT` | let the web view type into this terminal (see Security) |
 | `--bind` | `TCOMP_BIND` | `standalone` only: address the embedded relay listens on (default `127.0.0.1:0`); a bare IP takes a random port |
+| `--public-url` | `TCOMP_PUBLIC_URL` | `standalone` only: base URL to build the watch link from (default: the bound address) |
 
 The child's exit code is the wrapper's exit code. If the connection drops the
 client reconnects with exponential backoff and resumes the same session. If the
@@ -124,9 +126,17 @@ The URL it prints is the one to open from anywhere else on the tailnet: the
 address you bound is the address in the URL, so there is nothing to rewrite. Give
 it a port — `--bind 100.101.102.103:8080` — to get the same URL on every run.
 
-Do not bind a wildcard. `--bind 0.0.0.0:8080` listens on every interface rather
-than only the tailnet one, and the URL comes out as `http://0.0.0.0:8080/s/…`,
-which is not a link anyone can open.
+A wildcard bind listens on every interface rather than only the tailnet one, so
+prefer the tailnet address. If you do want one, name the URL yourself, since
+`0.0.0.0` reads back as `localhost` and that is not the address a phone needs:
+
+```sh
+tcomp standalone --bind 0.0.0.0:8080 --public-url http://100.101.102.103:8080 -- claude
+```
+
+`--public-url` (env `TCOMP_PUBLIC_URL`) is the same knob the relay uses, and it
+only changes the link tcomp prints — the viewer works off whatever address you
+actually loaded it on.
 
 That traffic rides the tailnet's WireGuard tunnel but is itself plain HTTP.
 `tailscale serve` is the other route: leave the relay on loopback and proxy to
@@ -165,7 +175,7 @@ open internet, where an unauthenticated terminal feed is as bad as it sounds.
 | Env | Default | Meaning |
 | --- | --- | --- |
 | `TCOMP_BIND` | `0.0.0.0:8080` | listen address |
-| `TCOMP_PUBLIC_URL` | `http://localhost:8080` | used to build session URLs |
+| `TCOMP_PUBLIC_URL` | the bound address | used to build session URLs; a wildcard bind reads back as `localhost` |
 | `TCOMP_WEB_DIR` | `web` | directory holding the viewer pages |
 | `TCOMP_ENDED_TTL` | `60` | seconds a cleanly-exited session is kept |
 | `TCOMP_STALE_TTL` | `14400` | seconds a disconnected session is kept |

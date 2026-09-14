@@ -18,9 +18,7 @@ impl Config {
     pub fn from_env() -> Self {
         Self {
             bind: env_or("TCOMP_BIND", "0.0.0.0:8080"),
-            public_url: env_or("TCOMP_PUBLIC_URL", "http://localhost:8080")
-                .trim_end_matches('/')
-                .to_string(),
+            public_url: normalize_public_url(&env_or("TCOMP_PUBLIC_URL", "")),
             web_dir: env_or("TCOMP_WEB_DIR", "web"),
             ended_ttl: Duration::from_secs(env_num("TCOMP_ENDED_TTL", 60)),
             stale_ttl: Duration::from_secs(env_num("TCOMP_STALE_TTL", 4 * 60 * 60)),
@@ -33,6 +31,10 @@ impl Config {
     pub fn session_url(&self, id: &str) -> String {
         format!("{}/s/{}", self.public_url, id)
     }
+}
+
+pub fn normalize_public_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
 }
 
 fn env_or(key: &str, default: &str) -> String {

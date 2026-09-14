@@ -17,6 +17,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tower_http::services::ServeDir;
 
+fn public_url_for(addr: std::net::SocketAddr) -> String {
+    if addr.ip().is_unspecified() {
+        format!("http://localhost:{}", addr.port())
+    } else {
+        format!("http://{addr}")
+    }
+}
+
 #[derive(Clone)]
 pub struct App {
     pub config: Arc<Config>,
@@ -31,9 +39,10 @@ pub async fn serve(mut config: Config, on_ready: impl FnOnce(&str)) -> anyhow::R
     let listener = tokio::net::TcpListener::bind(&config.bind)
         .await
         .with_context(|| format!("cannot bind {}", config.bind))?;
-    let bound = listener.local_addr()?.to_string();
+    let addr = listener.local_addr()?;
+    let bound = addr.to_string();
     if config.public_url.is_empty() {
-        config.public_url = format!("http://{bound}");
+        config.public_url = public_url_for(addr);
     }
 
     let config = Arc::new(config);
@@ -144,5 +153,48 @@ async fn page(app: &App, name: &str) -> Response {
             tracing::error!(%error, name, "cannot read page");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod public_url_tests {
+    use super::public_url_for;
+    use crate::server::config::normalize_public_url;
+
+    #[test]
+    fn wildcard_bind_becomes_localhost() {
+        assert_eq!(
+            public_url_for("0.0.0.0:8080".parse().unwrap()),
+            "http://localhost:8080"
+        );
+        assert_eq!(
+            public_url_for("[::]:8080".parse().unwrap()),
+            "http://localhost:8080"
+        );
+    }
+
+    #[test]
+    fn specific_address_is_used_verbatim() {
+        assert_eq!(
+            public_url_for("100.101.102.103:41157".parse().unwrap()),
+            "http://100.101.102.103:41157"
+        );
+        assert_eq!(
+            public_url_for("[fd7a::1]:8080".parse().unwrap()),
+            "http://[fd7a::1]:8080"
+        );
+    }
+
+    #[test]
+    fn public_url_loses_only_its_trailing_slash() {
+        assert_eq!(normalize_public_url(""), "");
+        assert_eq!(
+            normalize_public_url(" https://box.tail1234.ts.net/ "),
+            "https://box.tail1234.ts.net"
+        );
+        assert_eq!(
+            normalize_public_url("https://box.tail1234.ts.net/tcomp"),
+            "https://box.tail1234.ts.net/tcomp"
+        );
     }
 }

@@ -61,6 +61,10 @@ enum Cmd {
         #[arg(long, env = "TCOMP_BIND")]
         bind: Option<String>,
 
+        /// Base URL to build watch links from (default: the bound address)
+        #[arg(long, env = "TCOMP_PUBLIC_URL")]
+        public_url: Option<String>,
+
         #[arg(last = true, required = true)]
         cmd: Vec<String>,
     },
@@ -88,10 +92,14 @@ fn main() -> Result<()> {
             token,
             allow_input,
             bind,
+            public_url,
             cmd,
         }) => {
             let mode = PtyMode::Standalone {
                 bind: listen_addr(bind),
+                public_url: server::config::normalize_public_url(
+                    &public_url.unwrap_or_default(),
+                ),
             };
             let code = runtime.block_on(run_pty(cmd, mode, name, token, allow_input))?;
             term::restore();
@@ -126,7 +134,7 @@ fn main() -> Result<()> {
 
 enum PtyMode {
     /// Spin up an embedded relay on `bind`, print the URL, then connect.
-    Standalone { bind: String },
+    Standalone { bind: String, public_url: String },
     /// Connect to an externally-running relay.
     Remote { relay: String },
 }
@@ -189,11 +197,11 @@ async fn run_pty(
     // Resolve the relay URL — for Standalone, start an embedded server first.
     let relay_url: Option<String> = match mode {
         PtyMode::Remote { relay } => Some(relay),
-        PtyMode::Standalone { bind } => {
+        PtyMode::Standalone { bind, public_url } => {
             // Bind on a random port, start relay in background.
             let cfg = server::config::Config {
                 bind,
-                public_url: String::new(), // filled in after bind
+                public_url,
                 web_dir: web_dir(),
                 ..server::config::Config::from_env()
             };
