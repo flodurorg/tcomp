@@ -3,11 +3,20 @@
 Run a command locally; watch it read-only in a browser.
 
 ```
-tcomp --relay https://tcomp.example.com -- claude
+tcomp standalone -- claude                          # self-contained, prints a URL
+tcomp --relay https://tcomp.example.com -- claude   # via a shared relay
 ```
 
 The command runs exactly as it would in your terminal. At the same time a
 read-only live view is available at a URL served by the relay.
+
+One binary, three modes:
+
+| Mode | Command | Use |
+| --- | --- | --- |
+| standalone | `tcomp standalone -- <cmd>` | embedded relay on a random loopback port; nothing to deploy |
+| client | `tcomp --relay URL -- <cmd>` | connect to a relay someone else is running |
+| server | `tcomp serve` | be that relay (this is what the Docker image runs) |
 
 **No inbound port is opened on the workstation.** The wrapper dials *out* to the
 relay, so it works behind NAT, on a customer network, or on someone else's VPN.
@@ -25,17 +34,20 @@ default and decided by the host, never by the relay or the browser. Do not use i
 on a relay that is reachable by anyone you would not hand a shell.
 
 Run the relay somewhere private, or put an authenticating proxy in front of it,
-until auth lands. `crates/tcomp-relay/src/auth.rs` is the single seam: it is
+until auth lands. `crates/tcomp/src/server/auth.rs` is the single seam: it is
 called on the index, on `/s/<id>`, on `/ws/produce`, and separately for write
 access, so read-only and read-write can be gated independently.
+
+`tcomp standalone` binds loopback only, so it is reachable from your machine
+until you deliberately expose it (a tunnel, an SSH forward, a wider bind).
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `crates/tcomp` | client wrapper (spawns the pty, streams out) |
-| `crates/tcomp-relay` | relay server (axum, session state, viewer fan-out) |
-| `crates/proto` | wire types shared by both |
+| `crates/tcomp` | the binary — pty wrapper, and `server/` holding the relay |
+| `crates/tcomp/src/server` | axum routes, session state, viewer fan-out |
+| `crates/proto` | wire types shared by client and server |
 | `web/` | viewer pages + vendored xterm.js, no build step |
 
 ## Development
@@ -48,10 +60,16 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-Run a relay and point a session at it:
+Everything in one process:
 
 ```sh
-cargo run -p tcomp-relay                                  # :8080
+cargo run -p tcomp -- standalone -- htop
+```
+
+Or a relay plus a separate session, which is what production looks like:
+
+```sh
+cargo run -p tcomp -- serve                                # :8080
 cargo run -p tcomp -- --relay http://localhost:8080 -- htop
 ```
 
@@ -68,21 +86,29 @@ rebuild — reload the page. Rust changes need `--build`.
 ## Client
 
 ```
-tcomp [--relay URL] [--name NAME] [--token TOKEN] [--local] -- <command>...
+tcomp --relay URL [--name NAME] [--token TOKEN] [--allow-input] -- <command>...
+tcomp standalone   [--name NAME] [--token TOKEN] [--allow-input] -- <command>...
 ```
 
 | Flag | Env | Meaning |
 | --- | --- | --- |
-| `--relay` | `TCOMP_RELAY` | relay base URL; without it tcomp is a plain pty wrapper |
+| `--relay` | `TCOMP_RELAY` | relay base URL; required unless you use `standalone` |
 | `--name` | `TCOMP_NAME` | label in the web UI (default: hostname) |
 | `--token` | `TCOMP_TOKEN` | sent in the hello frame; ignored in v1 |
-| `--local` | | never connect, even if `--relay` is set |
-| `--allow-input` | | let the web view type into this terminal (see Security) |
+| `--allow-input` | `TCOMP_ALLOW_INPUT` | let the web view type into this terminal (see Security) |
 
 The child's exit code is the wrapper's exit code. If the connection drops the
-client reconnects with exponential backoff and resumes the same session.
+client reconnects with exponential backoff and resumes the same session. If the
+relay has forgotten that session — it restarted, or the TTL ran out — the client
+says so and prints the new URL rather than reattaching silently.
+
+Status lines go to stderr, never into the stream the browser sees, so they cannot
+be confused with the command's own output. They are coloured when stderr is a
+terminal and plain otherwise, honouring `NO_COLOR` and `TERM=dumb`.
 
 ## Relay
+
+`tcomp serve` reads its configuration from the environment:
 
 | Env | Default | Meaning |
 | --- | --- | --- |
@@ -113,6 +139,11 @@ A disconnected session goes live again by itself if the client reconnects.
 shows that terminal alone at the host's exact dimensions, scaled to fit the
 viewport — the grid is never reflowed, so what you see matches the host
 character for character. Works on a phone.
+
+A banner above the terminal names the session and says whether it takes input.
+It rides its own control frame rather than the byte stream, so tcomp's own
+messages never end up in the terminal's scrollback, and it is replayed on join
+so it is there however late you open the page.
 
 Without `--allow-input` the browser never sends input, and the viewer socket
 discards anything it receives.
