@@ -2,23 +2,64 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build (e.g. v0.1.0)"
+        description: "Existing tag to rebuild (e.g. v0.1.0)"
         required: true
 
 permissions:
   contents: write
+  pull-requests: write
   packages: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push'
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  setup:
+    needs: release-please
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.target.outputs.build }}
+      tag: ${{ steps.target.outputs.tag }}
+    steps:
+      - id: target
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          RELEASE_CREATED: ${{ needs.release-please.outputs.release_created }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          if [ -n "$DISPATCH_TAG" ]; then
+            tag="$DISPATCH_TAG"
+          elif [ "$RELEASE_CREATED" = "true" ]; then
+            tag="$RELEASE_TAG"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
   binaries:
     name: ${{ matrix.target }}
+    needs: setup
+    if: needs.setup.outputs.build == 'true'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -29,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.setup.outputs.tag }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -50,9 +91,10 @@ jobs:
       # web/ is read from disk at runtime, so it ships alongside the binary.
       - name: package
         id: package
+        env:
+          VERSION: ${{ needs.setup.outputs.tag }}
         run: |
-          version="${{ inputs.tag || github.ref_name }}"
-          name="tcomp-${version}-${{ matrix.target }}"
+          name="tcomp-${VERSION}-${{ matrix.target }}"
           mkdir -p "dist/${name}"
           cp "target/${{ matrix.target }}/release/tcomp" "dist/${name}/"
           cp -r web "dist/${name}/web"
@@ -74,6 +116,8 @@ jobs:
   # below assembles them into one multi-arch tag.
   image:
     name: image (${{ matrix.arch }})
+    needs: setup
+    if: needs.setup.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -86,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.setup.outputs.tag }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -127,7 +171,7 @@ jobs:
 
   merge:
     name: image (manifest)
-    needs: image
+    needs: [setup, image]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
@@ -149,8 +193,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},value=${{ inputs.tag || github.ref_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag || github.ref_name }}
+            type=semver,pattern={{version}},value=${{ needs.setup.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.setup.outputs.tag }}
             type=raw,value=latest
 
       - name: create manifest list
@@ -165,8 +209,8 @@ jobs:
           docker buildx imagetools inspect \
             ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
 
-  release:
-    needs: [binaries, merge]
+  assets:
+    needs: [setup, binaries, merge]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
@@ -175,10 +219,9 @@ jobs:
           pattern: "*-unknown-linux-musl"
           merge-multiple: true
 
-      - uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          generate_release_notes: true
-          files: |
-            dist/*.tar.gz
-            dist/*.sha256
+      - name: upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.setup.outputs.tag }}
+        run: gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 --clobber
