@@ -58,6 +58,7 @@
     background: #05070b;
   }
 
+  #host { touch-action: pan-x pinch-zoom; }
   body.frozen #host { filter: grayscale(.85) brightness(.82); }
   .xterm .xterm-viewport { overflow-y: auto; }
 
@@ -238,6 +239,12 @@ const MIN_FONT = 4;
 const MAX_FONT = 34;
 const PAD = 10;
 const KEYBAR_KEY = 'tcomp.terminal-keys';
+const TOUCH_SLOP = 6;
+const FLING_DECAY = 0.94;
+const FLING_CUTOFF = 0.04;
+const FLING_GAP = 120;
+const MAX_FLING = 4;
+const MAX_ALT_LINES = 24;
 const keySequences = {
   escape: '\x1b',
   tab: '\t',
@@ -277,6 +284,13 @@ let sessionCmd = '';
 let sessionTitle = '';
 let sessionCwd = '';
 let keybarOpen = loadKeybarPreference();
+let touchId = null;
+let touchY = 0;
+let touchAt = 0;
+let touchVelocity = 0;
+let touchResidue = 0;
+let dragging = false;
+let fling = null;
 let shiftActive = false;
 let ctrlActive = false;
 const encoder = new TextEncoder();
@@ -558,6 +572,98 @@ document.getElementById('banner-dismiss').addEventListener('click', () => {
 
 stage.addEventListener('click', () => {
   if (allowInput && status === 'live' && term) term.focus();
+});
+
+function cellHeight() {
+  const el = screenEl();
+  return term && el && term.rows ? el.offsetHeight / term.rows : 0;
+}
+
+function scrollByLines(lines) {
+  if (term.buffer.active.type === 'normal') {
+    term.scrollLines(lines);
+    return;
+  }
+  const app = term.modes && term.modes.applicationCursorKeysMode;
+  const key = lines < 0 ? (app ? '\x1bOA' : '\x1b[A') : (app ? '\x1bOB' : '\x1b[B');
+  send(key.repeat(Math.min(Math.abs(lines), MAX_ALT_LINES)));
+}
+
+function panBy(pixels) {
+  const height = cellHeight();
+  if (!height) return;
+  touchResidue += pixels / height;
+  const lines = Math.trunc(touchResidue);
+  touchResidue -= lines;
+  if (lines) scrollByLines(lines);
+}
+
+function stopFling() {
+  if (fling !== null) cancelAnimationFrame(fling);
+  fling = null;
+}
+
+function startFling() {
+  let velocity = Math.max(-MAX_FLING, Math.min(MAX_FLING, touchVelocity));
+  let previous = performance.now();
+  const step = (now) => {
+    const elapsed = Math.min(48, now - previous);
+    previous = now;
+    panBy(-velocity * elapsed);
+    velocity *= Math.pow(FLING_DECAY, elapsed / 16.7);
+    fling = Math.abs(velocity) > FLING_CUTOFF ? requestAnimationFrame(step) : null;
+  };
+  fling = requestAnimationFrame(step);
+}
+
+function trackedTouch(event) {
+  for (const touch of event.changedTouches) {
+    if (touch.identifier === touchId) return touch;
+  }
+  return null;
+}
+
+host.addEventListener('touchstart', (event) => {
+  stopFling();
+  if (!term || event.touches.length > 1) {
+    touchId = null;
+    return;
+  }
+  const touch = event.changedTouches[0];
+  touchId = touch.identifier;
+  touchY = touch.clientY;
+  touchAt = event.timeStamp;
+  touchVelocity = 0;
+  touchResidue = 0;
+  dragging = false;
+}, { passive: true });
+
+host.addEventListener('touchmove', (event) => {
+  if (touchId === null) return;
+  const touch = trackedTouch(event);
+  if (!touch) return;
+  const delta = touch.clientY - touchY;
+  if (!dragging && Math.abs(delta) < TOUCH_SLOP) return;
+  dragging = true;
+  event.preventDefault();
+  const elapsed = Math.max(1, event.timeStamp - touchAt);
+  touchVelocity = elapsed > FLING_GAP ? 0 : (delta / elapsed) * 0.8 + touchVelocity * 0.2;
+  touchY = touch.clientY;
+  touchAt = event.timeStamp;
+  panBy(-delta);
+}, { passive: false });
+
+host.addEventListener('touchend', (event) => {
+  if (touchId === null || !trackedTouch(event)) return;
+  touchId = null;
+  if (dragging && event.timeStamp - touchAt < FLING_GAP) startFling();
+  dragging = false;
+});
+
+host.addEventListener('touchcancel', () => {
+  touchId = null;
+  dragging = false;
+  stopFling();
 });
 
 let pending = null;
