@@ -245,6 +245,8 @@ const FLING_CUTOFF = 0.04;
 const FLING_GAP = 120;
 const MAX_FLING = 4;
 const MAX_ALT_LINES = 24;
+const WHEEL_DELTA = 60;
+const LINES_PER_NOTCH = 3;
 const keySequences = {
   escape: '\x1b',
   tab: '\t',
@@ -285,10 +287,12 @@ let sessionTitle = '';
 let sessionCwd = '';
 let keybarOpen = loadKeybarPreference();
 let touchId = null;
+let touchX = 0;
 let touchY = 0;
 let touchAt = 0;
 let touchVelocity = 0;
 let touchResidue = 0;
+let notchResidue = 0;
 let dragging = false;
 let fling = null;
 let shiftActive = false;
@@ -579,13 +583,39 @@ function cellHeight() {
   return term && el && term.rows ? el.offsetHeight / term.rows : 0;
 }
 
+function wheelLines(lines) {
+  const el = screenEl();
+  if (!el) return;
+  notchResidue += lines / LINES_PER_NOTCH;
+  const notches = Math.trunc(notchResidue);
+  notchResidue -= notches;
+  const deltaY = notches < 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+  const count = Math.min(Math.abs(notches), MAX_ALT_LINES);
+  for (let i = 0; i < count; i++) {
+    el.dispatchEvent(new WheelEvent('wheel', {
+      deltaY,
+      deltaMode: 0,
+      bubbles: true,
+      cancelable: true,
+      clientX: touchX,
+      clientY: touchY,
+    }));
+  }
+}
+
 function scrollByLines(lines) {
   if (term.buffer.active.type === 'normal') {
     term.scrollLines(lines);
     return;
   }
-  const app = term.modes && term.modes.applicationCursorKeysMode;
-  const key = lines < 0 ? (app ? '\x1bOA' : '\x1b[A') : (app ? '\x1bOB' : '\x1b[B');
+  const modes = term.modes || {};
+  if (modes.mouseTrackingMode && modes.mouseTrackingMode !== 'none') {
+    wheelLines(lines);
+    return;
+  }
+  const key = lines < 0
+    ? (modes.applicationCursorKeysMode ? '\x1bOA' : '\x1b[A')
+    : (modes.applicationCursorKeysMode ? '\x1bOB' : '\x1b[B');
   send(key.repeat(Math.min(Math.abs(lines), MAX_ALT_LINES)));
 }
 
@@ -631,10 +661,12 @@ host.addEventListener('touchstart', (event) => {
   }
   const touch = event.changedTouches[0];
   touchId = touch.identifier;
+  touchX = touch.clientX;
   touchY = touch.clientY;
   touchAt = event.timeStamp;
   touchVelocity = 0;
   touchResidue = 0;
+  notchResidue = 0;
   dragging = false;
 }, { passive: true });
 
@@ -648,6 +680,7 @@ host.addEventListener('touchmove', (event) => {
   event.preventDefault();
   const elapsed = Math.max(1, event.timeStamp - touchAt);
   touchVelocity = elapsed > FLING_GAP ? 0 : (delta / elapsed) * 0.8 + touchVelocity * 0.2;
+  touchX = touch.clientX;
   touchY = touch.clientY;
   touchAt = event.timeStamp;
   panBy(-delta);
