@@ -153,11 +153,16 @@
     outline: 2px solid var(--ended);
     outline-offset: 2px;
   }
-  .keybar button[aria-pressed="true"] {
+  .keybar button[aria-pressed="true"],
+  .keybar button.down {
     border-color: var(--ended);
     background: linear-gradient(180deg, #31547e, #263f61);
     box-shadow: 0 2px 0 #13243a, 0 0 0 1px rgba(91, 157, 255, .2);
     color: #fff;
+  }
+  .keybar button.down {
+    transform: translateY(2px);
+    box-shadow: 0 0 0 #13243a, 0 1px 4px rgba(0, 0, 0, .22);
   }
   .keybar .modifier { min-width: 70px; }
   .key-mod {
@@ -272,6 +277,31 @@ const keySequences = {
   f12: '\x1b[24~',
 };
 
+const physicalKeys = {
+  Escape: 'escape',
+  Tab: 'tab',
+  Home: 'home',
+  End: 'end',
+  PageUp: 'pageUp',
+  PageDown: 'pageDown',
+  ArrowLeft: 'left',
+  ArrowDown: 'down',
+  ArrowUp: 'up',
+  ArrowRight: 'right',
+  F1: 'f1',
+  F2: 'f2',
+  F3: 'f3',
+  F4: 'f4',
+  F5: 'f5',
+  F6: 'f6',
+  F7: 'f7',
+  F8: 'f8',
+  F9: 'f9',
+  F10: 'f10',
+  F11: 'f11',
+  F12: 'f12',
+};
+
 let term = null;
 let socket = null;
 let cols = 80;
@@ -302,6 +332,9 @@ const keybar = document.getElementById('keybar');
 const keyboardToggle = document.getElementById('keyboard-toggle');
 const shiftKey = keybar.querySelector('[data-modifier="shift"]');
 const ctrlKey = keybar.querySelector('[data-modifier="ctrl"]');
+const keyButtons = new Map(
+  [...keybar.querySelectorAll('[data-key]')].map((button) => [button.dataset.key, button]),
+);
 
 function loadKeybarPreference() {
   try {
@@ -359,6 +392,15 @@ function setCtrl(active) {
   ctrlKey.setAttribute('aria-pressed', String(active));
 }
 
+function setKeyDown(name, down) {
+  const button = keyButtons.get(name);
+  if (button) button.classList.toggle('down', down);
+}
+
+function clearKeysDown() {
+  for (const button of keyButtons.values()) button.classList.remove('down');
+}
+
 function compose(sequence) {
   if (ctrlActive && sequence.length === 1 && /[a-zA-Z]/.test(sequence)) {
     return String.fromCharCode(sequence.toLowerCase().charCodeAt(0) - 96);
@@ -383,6 +425,7 @@ function applyInput(enabled) {
   if (!open) {
     setShift(false);
     setCtrl(false);
+    clearKeysDown();
   }
   if (term) {
     term.options.disableStdin = !active;
@@ -556,11 +599,19 @@ keybar.addEventListener('click', (event) => {
 addEventListener('keydown', (event) => {
   if (event.key === 'Shift') setShift(true);
   else if (event.key === 'Control') setCtrl(true);
-});
+  else setKeyDown(physicalKeys[event.key], true);
+}, true);
 
 addEventListener('keyup', (event) => {
   if (event.key === 'Shift') setShift(false);
   else if (event.key === 'Control') setCtrl(false);
+  else setKeyDown(physicalKeys[event.key], false);
+}, true);
+
+addEventListener('blur', () => {
+  setShift(false);
+  setCtrl(false);
+  clearKeysDown();
 });
 
 keyboardToggle.addEventListener('click', () => {
