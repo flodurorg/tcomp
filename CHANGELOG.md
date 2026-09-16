@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2](https://github.com/flodurorg/tcomp/compare/v0.5.1...v0.5.2) (2026-09-16)
+
+
+### Bug Fixes
+
+* **web:** scroll the terminal with touch drag and fling ([0cea5ff](https://github.com/flodurorg/tcomp/commit/0cea5ffd622b464084509ead086968df6a0ef9c3))
+* **web:** send wheel reports, not cursor keys, when scrolling a mouse app ([66396c9](https://github.com/flodurorg/tcomp/commit/66396c9f949a6f15b0fda8337a6c7e4e34ffd03a))
+
 ## [0.5.1](https://github.com/flodurorg/tcomp/compare/v0.5.0...v0.5.1) (2026-09-14)
 
 
