@@ -2,7 +2,7 @@
 
 Start a session on your laptop and carry on with it from anywhere.
 
-![tcomp mirroring a live terminal into the browser](docs/demo.gif)
+![selecting one of several floating session windows and typing on both the terminal and the browser](docs/demo.gif)
 
 ## Features
 
@@ -174,6 +174,10 @@ flags as well:
 
 ## Sessions
 
+Every producer shows up as a floating window on the relay's dashboard — click
+one to open it, type on the laptop or in the browser, and it's mirrored to
+the other.
+
 | In the UI    | Status  | When                                             | Kept for          |
 | ------------ | ------- | ------------------------------------------------ | ----------------- |
 | live         | `live`  | producer connected                               | while connected   |
@@ -201,4 +205,6 @@ cargo run -p tcomp -- standalone -- htop
 ```
 
 `web/` is read from disk per request, so viewer changes need no rebuild.
-`docs/record-demo.sh` regenerates the GIF above.
+`docs/record-demo.sh` regenerates the GIF above. `cargo test --test
+floating_windows -- --ignored` covers the same flow (2-3 sessions, select
+one, type on both sides) as a browser-driven integration test.

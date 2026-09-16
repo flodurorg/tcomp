@@ -46,6 +46,9 @@ dashmap = "6.2.1"
 rand = "0.10.2"
 tower-http = { version = "0.7.1", features = ["fs", "trace"] }
 
+[dev-dependencies]
+fantoccini = { version = "0.22", default-features = false, features = ["rustls-tls"] }
+
 [profile.release]
 lto = "thin"
 strip = true
