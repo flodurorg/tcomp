@@ -19,7 +19,7 @@ env:
 
 jobs:
   release-please:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     if: github.event_name == 'push'
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -34,7 +34,7 @@ jobs:
   setup:
     needs: release-please
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       build: ${{ steps.target.outputs.build }}
       tag: ${{ steps.target.outputs.tag }}
@@ -60,7 +60,7 @@ jobs:
     name: ${{ matrix.target }}
     needs: setup
     if: needs.setup.outputs.build == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -172,7 +172,7 @@ jobs:
   merge:
     name: image (manifest)
     needs: [setup, image]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -212,7 +212,7 @@ jobs:
   chart:
     needs: [setup, merge]
     if: needs.setup.outputs.build == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -239,7 +239,7 @@ jobs:
 
   assets:
     needs: [setup, binaries, merge, chart]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/download-artifact@v8
         with:
