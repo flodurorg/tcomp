@@ -19,6 +19,7 @@ pub struct Params {
     pub rows: u16,
     pub input: bool,
     pub cwd: Option<String>,
+    pub key: Option<crate::crypto::Key>,
 }
 
 pub fn produce_url(base: &str) -> Result<String> {
@@ -47,6 +48,18 @@ pub async fn run(
             return;
         }
     };
+
+    if params.key.is_some() {
+        if let Err(error) = crate::encrypted::run(&url, &params, &mut events, writes.as_ref()).await
+        {
+            crate::term::note(
+                crate::term::Note::Warn,
+                &format!("encrypted relay stopped: {error}"),
+            );
+            drain(&mut events).await;
+        }
+        return;
+    }
 
     let mut session: Option<String> = None;
     let mut backoff = BACKOFF_MIN;
@@ -135,10 +148,10 @@ enum Outcome {
     Disconnected,
 }
 
-type Socket =
+pub(crate) type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-async fn connect(
+pub(crate) async fn connect(
     url: &str,
     params: &Params,
     session: &Option<String>,
@@ -147,15 +160,31 @@ async fn connect(
 ) -> Result<(Socket, proto::HelloAck)> {
     let (mut socket, _) = tokio_tungstenite::connect_async(url).await?;
     let hello = proto::Hello {
-        v: proto::VERSION,
+        v: if params.key.is_some() {
+            proto::ENCRYPTED_VERSION
+        } else {
+            proto::VERSION
+        },
         token: params.token.clone(),
-        name: params.name.clone(),
-        cmd: params.cmd.clone(),
+        name: if params.key.is_some() {
+            "Encrypted session".into()
+        } else {
+            params.name.clone()
+        },
+        cmd: if params.key.is_some() {
+            String::new()
+        } else {
+            params.cmd.clone()
+        },
         cols,
         rows,
         input: params.input,
         resume: session.clone(),
-        cwd: params.cwd.clone(),
+        cwd: if params.key.is_some() {
+            None
+        } else {
+            params.cwd.clone()
+        },
     };
     socket
         .send(Message::Text(serde_json::to_string(&hello)?.into()))
@@ -164,6 +193,9 @@ async fn connect(
     match socket.next().await {
         Some(Ok(Message::Text(text))) => {
             let ack: proto::HelloAck = serde_json::from_str(&text)?;
+            if params.key.is_some() && ack.encryption != Some(proto::ENCRYPTED_VERSION) {
+                return Err(Rejected("relay does not support end-to-end encryption".into()).into());
+            }
             Ok((socket, ack))
         }
         Some(Ok(Message::Close(Some(frame)))) if frame.code == CloseCode::Policy => {
@@ -177,7 +209,7 @@ async fn connect(
 
 /// Turned away on purpose; `run` gives up rather than reconnecting forever.
 #[derive(Debug)]
-struct Rejected(String);
+pub(crate) struct Rejected(pub String);
 
 impl std::fmt::Display for Rejected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -279,7 +311,49 @@ async fn drain(events: &mut UnboundedReceiver<Event>) {
 
 #[cfg(test)]
 mod tests {
-    use super::produce_url;
+    use super::*;
+
+    #[tokio::test]
+    async fn encrypted_hello_hides_metadata_and_rejects_unnegotiated_ack() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let hello = socket.next().await.unwrap().unwrap().into_text().unwrap();
+            assert!(!hello.contains("private"));
+            let hello: proto::Hello = serde_json::from_str(&hello).unwrap();
+            assert_eq!(hello.v, proto::ENCRYPTED_VERSION);
+            assert_eq!(hello.name, "Encrypted session");
+            assert!(hello.cmd.is_empty());
+            assert!(hello.cwd.is_none());
+            socket
+                .send(Message::Text(
+                    r#"{"session":"s","url":"http://localhost/s/s"}"#.into(),
+                ))
+                .await
+                .unwrap();
+            if let Ok(Some(Ok(message))) =
+                tokio::time::timeout(Duration::from_secs(1), socket.next()).await
+            {
+                assert!(!matches!(message, Message::Binary(_)));
+            }
+        });
+        let params = Params {
+            relay: url.clone(),
+            name: "private-name".into(),
+            cmd: "private-command".into(),
+            token: None,
+            cols: 80,
+            rows: 24,
+            input: true,
+            cwd: Some("private-cwd".into()),
+            key: Some(crate::crypto::Key::generate().unwrap()),
+        };
+        let result = connect(&url, &params, &None, 80, 24).await;
+        assert!(matches!(result, Err(error) if error.is::<Rejected>()));
+        server.await.unwrap();
+    }
 
     #[test]
     fn https_becomes_wss() {

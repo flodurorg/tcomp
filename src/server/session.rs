@@ -1,3 +1,4 @@
+use crate::screen::{clamp_size, decode_into, dump_bytes, RESET};
 use crate::server::config::Config;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -9,10 +10,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedSender;
 
 const BROADCAST_CAPACITY: usize = 2048;
-const MAX_COLS: u16 = 1000;
-const MAX_ROWS: u16 = 500;
 const PREVIEW_LINES: usize = 24;
-const RESET: &[u8] = b"\x1bc";
 
 #[derive(Clone, Debug)]
 pub enum Frame {
@@ -38,7 +36,9 @@ struct State {
     updated_at: SystemTime,
     terminal_at: Option<SystemTime>,
     exit_code: Option<i32>,
-    vt: avt::Vt,
+    vt: Option<avt::Vt>,
+    encrypted: bool,
+    replay_ready: bool,
     history: VecDeque<Bytes>,
     history_len: usize,
     history_cap: usize,
@@ -93,7 +93,9 @@ impl Session {
                 updated_at: now,
                 terminal_at: None,
                 exit_code: None,
-                vt,
+                vt: Some(vt),
+                encrypted: false,
+                replay_ready: false,
                 history: VecDeque::new(),
                 history_len: 0,
                 history_cap: config.history_bytes,
@@ -106,11 +108,67 @@ impl Session {
         }
     }
 
+    pub fn new_encrypted(id: String, allow_input: bool, config: &Config) -> Self {
+        let session = Self::new(
+            id,
+            "Encrypted session".into(),
+            String::new(),
+            80,
+            24,
+            allow_input,
+            config,
+        );
+        {
+            let mut state = session.lock();
+            state.vt = None;
+            state.encrypted = true;
+        }
+        session
+    }
+
+    pub fn encrypted(&self) -> bool {
+        self.lock().encrypted
+    }
+
+    pub fn feed_encrypted(&self, epoch: u64, chunk: Bytes) -> bool {
+        let Ok(header) = crate::crypto::header(&chunk) else {
+            return false;
+        };
+        if header.kind == crate::crypto::INPUT {
+            return false;
+        }
+        let mut state = self.lock();
+        if !state.encrypted || state.epoch != epoch {
+            return false;
+        }
+        if header.kind == crate::crypto::SNAPSHOT {
+            state.history.clear();
+            state.history_len = 0;
+            state.replay_ready = chunk.len() <= state.history_cap;
+        }
+        if !state.replay_ready || state.history_len.saturating_add(chunk.len()) > state.history_cap
+        {
+            state.history.clear();
+            state.history_len = 0;
+            state.replay_ready = false;
+            let _ = self.tx.send(Frame::Ctrl(proto::Server::ReplayUnavailable));
+            return false;
+        }
+        state.history_len += chunk.len();
+        state.history.push_back(chunk.clone());
+        state.updated_at = SystemTime::now();
+        let _ = self.tx.send(Frame::Data(chunk));
+        true
+    }
+
     pub fn feed(&self, chunk: Bytes) {
         let mut state = self.lock();
+        if state.encrypted {
+            return;
+        }
         let mut carry = std::mem::take(&mut state.carry);
         carry.extend_from_slice(&chunk);
-        decode_into(&mut state.vt, &mut carry);
+        decode_into(state.vt.as_mut().unwrap(), &mut carry);
         if carry.len() > 8 {
             carry.clear();
         }
@@ -151,14 +209,18 @@ impl Session {
     pub fn resize(&self, cols: u16, rows: u16) {
         let (cols, rows) = clamp_size(cols, rows);
         let mut state = self.lock();
-        if state.cols == cols && state.rows == rows {
+        if state.encrypted || (state.cols == cols && state.rows == rows) {
             return;
         }
-        state.vt.resize(cols as usize, rows as usize);
+        state
+            .vt
+            .as_mut()
+            .unwrap()
+            .resize(cols as usize, rows as usize);
         state.cols = cols;
         state.rows = rows;
         state.updated_at = SystemTime::now();
-        let dump = dump_bytes(&state.vt);
+        let dump = dump_bytes(state.vt.as_ref().unwrap());
         let _ = self
             .tx
             .send(Frame::Ctrl(proto::Server::Resize { cols, rows }));
@@ -176,13 +238,16 @@ impl Session {
             input: state.allow_input,
             title: state.title.clone(),
             cwd: state.cwd.clone(),
+            encryption: state.encrypted.then_some(proto::ENCRYPTED_VERSION),
         };
         let banner = state
             .banner
             .clone()
             .map(|text| proto::Server::Banner { text });
-        let payload = if state.status == Status::Live || state.history.is_empty() {
-            vec![dump_bytes(&state.vt)]
+        let payload = if state.encrypted {
+            state.history.iter().cloned().collect()
+        } else if state.status == Status::Live || state.history.is_empty() {
+            vec![dump_bytes(state.vt.as_ref().unwrap())]
         } else {
             let mut out = Vec::with_capacity(state.history.len() + 1);
             out.push(Bytes::from_static(RESET));
@@ -192,7 +257,11 @@ impl Session {
         let rx = self.tx.subscribe();
         Join {
             init,
-            banner,
+            banner: if state.encrypted && !state.replay_ready {
+                Some(proto::Server::ReplayUnavailable)
+            } else {
+                banner
+            },
             payload,
             rx,
         }
@@ -206,7 +275,7 @@ impl Session {
 
     pub fn dump(&self) -> Bytes {
         let state = self.lock();
-        dump_bytes(&state.vt)
+        dump_bytes(state.vt.as_ref().unwrap())
     }
 
     pub fn mark_exit(&self, code: i32) {
@@ -317,13 +386,10 @@ impl Session {
             started_at: unix(state.started_at),
             updated_at: unix(state.updated_at),
             expires_in,
-            preview: preview(&state.vt),
+            preview: state.vt.as_ref().map(preview).unwrap_or_default(),
+            encryption: state.encrypted.then_some(proto::ENCRYPTED_VERSION),
         }
     }
-}
-
-fn clamp_size(cols: u16, rows: u16) -> (u16, u16) {
-    (cols.clamp(1, MAX_COLS), rows.clamp(1, MAX_ROWS))
 }
 
 fn preview(vt: &avt::Vt) -> String {
@@ -345,85 +411,10 @@ fn preview(vt: &avt::Vt) -> String {
     lines[start..].join("\n")
 }
 
-fn dump_bytes(vt: &avt::Vt) -> Bytes {
-    let mut out = Vec::from(RESET);
-    out.extend_from_slice(normalize_sgr(&vt.dump()).as_bytes());
-    Bytes::from(out)
-}
-
-fn normalize_sgr(dump: &str) -> String {
-    let mut out = String::with_capacity(dump.len());
-    let mut rest = dump;
-    while let Some(start) = rest.find("\x1b[") {
-        out.push_str(&rest[..start]);
-        let tail = &rest[start + 2..];
-        let Some(end) = tail.find(|c: char| ('\u{40}'..='\u{7e}').contains(&c)) else {
-            out.push_str(&rest[start..]);
-            return out;
-        };
-        out.push_str("\x1b[");
-        if &tail[end..end + 1] == "m" {
-            out.push_str(&normalize_sgr_params(&tail[..end]));
-        } else {
-            out.push_str(&tail[..end]);
-        }
-        out.push_str(&tail[end..end + 1]);
-        rest = &tail[end + 1..];
-    }
-    out.push_str(rest);
-    out
-}
-
-fn normalize_sgr_params(params: &str) -> String {
-    params
-        .split(';')
-        .map(|param| {
-            let parts: Vec<&str> = param.split(':').collect();
-            match parts.as_slice() {
-                ["38" | "48" | "58", "2", _, _, _] | ["38" | "48" | "58", "5", _] => {
-                    parts.join(";")
-                }
-                _ => param.to_owned(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
 fn unix(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-fn decode_into(vt: &mut avt::Vt, carry: &mut Vec<u8>) {
-    loop {
-        match std::str::from_utf8(carry) {
-            Ok(text) => {
-                if !text.is_empty() {
-                    vt.feed_str(text);
-                }
-                carry.clear();
-                return;
-            }
-            Err(error) => {
-                let valid = error.valid_up_to();
-                if valid > 0 {
-                    vt.feed_str(std::str::from_utf8(&carry[..valid]).unwrap());
-                }
-                match error.error_len() {
-                    Some(bad) => {
-                        vt.feed_str("\u{fffd}");
-                        carry.drain(..valid + bad);
-                    }
-                    None => {
-                        carry.drain(..valid);
-                        return;
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[derive(Clone, Default)]
@@ -469,6 +460,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::screen::{MAX_COLS, MAX_ROWS};
 
     fn config() -> Config {
         Config {
@@ -498,7 +490,72 @@ mod tests {
     }
 
     fn screen(session: &Session) -> String {
-        preview(&session.lock().vt)
+        preview(session.lock().vt.as_ref().unwrap())
+    }
+
+    #[test]
+    fn encrypted_replay_is_opaque_bounded_and_atomic() {
+        use crate::crypto::{Key, Sender, OUTPUT, SNAPSHOT};
+        let mut cfg = config();
+        cfg.history_bytes = 1024;
+        let session = Session::new_encrypted("encrypted".into(), true, &cfg);
+        let key = Key::generate().unwrap();
+        let mut sender = Sender::new(&key, &session.id, false).unwrap();
+        let snapshot = Bytes::from(sender.seal(SNAPSHOT, b"private-screen").unwrap());
+        let delta = Bytes::from(sender.seal(OUTPUT, b"secret-output").unwrap());
+        let epoch = session.epoch();
+        assert!(session.feed_encrypted(epoch, snapshot.clone()));
+        assert!(session.feed_encrypted(epoch, delta.clone()));
+        assert!(session.lock().vt.is_none());
+        let mut joined = session.join();
+        assert_eq!(joined.payload, vec![snapshot.clone(), delta.clone()]);
+        assert!(matches!(
+            joined.init,
+            proto::Server::Init {
+                encryption: Some(2),
+                ..
+            }
+        ));
+        let listed = serde_json::to_string(&session.info(&cfg)).unwrap();
+        for secret in ["private-screen", "secret-output", &key.fragment()] {
+            assert!(!listed.contains(secret));
+        }
+        assert!(session.info(&cfg).preview.is_empty());
+        let next = Bytes::from(sender.seal(SNAPSHOT, b"next-screen").unwrap());
+        assert!(session.feed_encrypted(epoch, next.clone()));
+        assert!(matches!(joined.rx.try_recv().unwrap(), Frame::Data(bytes) if bytes == next));
+        assert_eq!(session.join().payload, vec![next]);
+        session.mark_disconnected(epoch);
+        assert_eq!(session.join().payload.len(), 1);
+        session.resume(80, 24, true);
+        assert!(!session.feed_encrypted(epoch, snapshot));
+        assert!(!session.feed_encrypted(session.epoch(), Bytes::from_static(b"plaintext")));
+        session.lock().history_cap = 1;
+        assert!(!session.feed_encrypted(session.epoch(), delta));
+        let joined = session.join();
+        assert!(joined.payload.is_empty());
+        assert!(matches!(
+            joined.banner,
+            Some(proto::Server::ReplayUnavailable)
+        ));
+    }
+
+    #[test]
+    fn encrypted_delta_never_replaces_a_missing_snapshot() {
+        let mut cfg = config();
+        cfg.history_bytes = 64;
+        let session = Session::new_encrypted("e".into(), false, &cfg);
+        let mut sender =
+            crate::crypto::Sender::new(&crate::crypto::Key::generate().unwrap(), "e", false)
+                .unwrap();
+        let delta = Bytes::from(sender.seal(crate::crypto::OUTPUT, b"output").unwrap());
+        assert!(!session.feed_encrypted(0, delta));
+        let oversized = Bytes::from(sender.seal(crate::crypto::SNAPSHOT, &[0; 65]).unwrap());
+        assert!(!session.feed_encrypted(0, oversized));
+        assert!(session.join().payload.is_empty());
+        let valid = Bytes::from(sender.seal(crate::crypto::SNAPSHOT, b"screen").unwrap());
+        assert!(session.feed_encrypted(0, valid.clone()));
+        assert_eq!(session.join().payload, vec![valid]);
     }
 
     #[test]

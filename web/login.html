@@ -73,6 +73,7 @@
     <button type="submit">Continue</button>
   </form>
 </main>
+<script src="/static/crypto.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
 const next = params.get('next');
@@ -81,6 +82,19 @@ document.getElementById('next').value =
   : location.pathname === '/login' ? '/'
   : location.pathname;
 if (params.has('bad')) document.getElementById('bad').classList.add('show');
+if (new URLSearchParams(location.hash.slice(1)).has('key')) {
+  try {
+    const path = document.getElementById('next').value;
+    const match = path.match(/^\/s\/([a-f0-9]{32})$/);
+    if (!match) throw new Error('Open the complete session watch link again.');
+    TcompCrypto.remember(match[1]);
+  } catch (error) {
+    const bad = document.getElementById('bad');
+    bad.textContent = `Cannot preserve the encryption key through sign-in: ${error.message} Allow session storage or sign in first, then reopen the watch link.`;
+    bad.classList.add('show');
+    document.querySelector('button[type="submit"]').disabled = true;
+  }
+}
 </script>
 </body>
 </html>

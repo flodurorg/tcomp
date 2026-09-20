@@ -68,7 +68,30 @@ async fn handle(socket: WebSocket, session: Arc<Session>, may_write: bool) {
             Ok(Frame::Data(bytes)) => sink.send(Message::Binary(bytes)).await,
             Ok(Frame::Ctrl(control)) => send_ctrl(&mut sink, &control).await,
             Err(RecvError::Lagged(dropped)) => {
-                tracing::debug!(dropped, "viewer lagged, resyncing from dump");
+                tracing::debug!(dropped, "viewer lagged, resyncing");
+                if session.encrypted() {
+                    let join = session.join();
+                    rx = join.rx;
+                    if let proto::Server::Init { status, .. } = join.init {
+                        if send_ctrl(&mut sink, &proto::Server::Status { status })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    if let Some(banner) = join.banner {
+                        if send_ctrl(&mut sink, &banner).await.is_err() {
+                            break;
+                        }
+                    }
+                    for chunk in join.payload {
+                        if sink.send(Message::Binary(chunk)).await.is_err() {
+                            return;
+                        }
+                    }
+                    continue;
+                }
                 sink.send(Message::Binary(session.dump())).await
             }
             Err(RecvError::Closed) => break,

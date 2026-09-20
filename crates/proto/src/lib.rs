@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u8 = 1;
+pub const ENCRYPTED_VERSION: u8 = 2;
+pub const MAX_ENCRYPTED_FRAME: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hello {
@@ -23,6 +25,35 @@ pub struct Hello {
 pub struct HelloAck {
     pub session: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_bytes: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum EncryptedPayload {
+    Snapshot {
+        cols: u16,
+        rows: u16,
+        name: String,
+        cmd: String,
+        title: Option<String>,
+        cwd: Option<String>,
+        input: bool,
+        epoch: String,
+        screen: String,
+        carry: Vec<u8>,
+        exit: Option<i32>,
+    },
+    Output {
+        bytes: Vec<u8>,
+    },
+    Input {
+        epoch: String,
+        bytes: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +91,10 @@ pub enum Server {
         input: bool,
         title: Option<String>,
         cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encryption: Option<u8>,
     },
+    ReplayUnavailable,
     Resize {
         cols: u16,
         rows: u16,
@@ -101,4 +135,6 @@ pub struct SessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in: Option<u64>,
     pub preview: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<u8>,
 }

@@ -48,6 +48,7 @@ struct ClientProcess {
     stdin: ChildStdin,
     stdout: Arc<Mutex<Vec<u8>>>,
     id: String,
+    key: Option<String>,
 }
 
 impl ClientProcess {
@@ -128,8 +129,17 @@ fn hermetic(cmd: &mut Command) -> &mut Command {
 }
 
 fn spawn_standalone(bin: &str, name: &str) -> (ClientProcess, String, String) {
+    spawn_standalone_mode(bin, name, false)
+}
+
+fn spawn_standalone_mode(
+    bin: &str,
+    name: &str,
+    encrypted: bool,
+) -> (ClientProcess, String, String) {
     let mut command = Command::new(bin);
     hermetic(&mut command);
+    command.env("TCOMP_ENCRYPT", encrypted.to_string());
     command
         .args([
             "standalone",
@@ -153,6 +163,10 @@ fn spawn_standalone(bin: &str, name: &str) -> (ClientProcess, String, String) {
     let stdin = guard.0.stdin.take().unwrap();
     let stdout = collect_into(guard.0.stdout.take().unwrap());
     let (base, id, token) = read_watch_url(guard.0.stderr.take().unwrap());
+    let (token, key) = match token.split_once("#key=") {
+        Some((token, key)) => (token.to_owned(), Some(key.to_owned())),
+        None => (token, None),
+    };
 
     (
         ClientProcess {
@@ -160,6 +174,7 @@ fn spawn_standalone(bin: &str, name: &str) -> (ClientProcess, String, String) {
             stdin,
             stdout,
             id,
+            key,
         },
         base,
         token,
@@ -167,8 +182,21 @@ fn spawn_standalone(bin: &str, name: &str) -> (ClientProcess, String, String) {
 }
 
 fn spawn_remote(bin: &str, base: &str, token: &str, name: &str) -> ClientProcess {
+    spawn_remote_mode(bin, base, token, name, false)
+}
+
+fn spawn_remote_mode(
+    bin: &str,
+    base: &str,
+    token: &str,
+    name: &str,
+    encrypted: bool,
+) -> ClientProcess {
     let mut command = Command::new(bin);
     hermetic(&mut command);
+    if encrypted {
+        command.arg("--encrypt");
+    }
     command
         .args([
             "--relay",
@@ -192,13 +220,15 @@ fn spawn_remote(bin: &str, base: &str, token: &str, name: &str) -> ClientProcess
 
     let stdin = guard.0.stdin.take().unwrap();
     let stdout = collect_into(guard.0.stdout.take().unwrap());
-    let (_, id, _) = read_watch_url(guard.0.stderr.take().unwrap());
+    let (_, id, token) = read_watch_url(guard.0.stderr.take().unwrap());
+    let key = token.split_once("#key=").map(|(_, key)| key.to_owned());
 
     ClientProcess {
         guard,
         stdin,
         stdout,
         id,
+        key,
     }
 }
 
@@ -261,38 +291,7 @@ async fn floating_windows_type_on_client_and_browser() {
     let win3 = spawn_remote(bin, &base, &token, "e2e-window-3");
     let mut windows = [win1, win2, win3];
 
-    let chromedriver_port = free_port();
-    let mut chromedriver = Command::new("xvfb-run");
-    chromedriver
-        .args([
-            "-a",
-            "-s",
-            "-screen 0 1280x900x24",
-            "chromedriver",
-            &format!("--port={chromedriver_port}"),
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let _chromedriver = Guarded::spawn(&mut chromedriver);
-
-    let client = {
-        let deadline = Instant::now() + BOOT_TIMEOUT;
-        loop {
-            match ClientBuilder::rustls()
-                .expect("rustls tls backend")
-                .capabilities(chromedriver_capabilities())
-                .connect(&format!("http://127.0.0.1:{chromedriver_port}"))
-                .await
-            {
-                Ok(client) => break client,
-                Err(error) if Instant::now() < deadline => {
-                    tokio::time::sleep(Duration::from_millis(150)).await;
-                    let _ = error;
-                }
-                Err(error) => panic!("could not connect to chromedriver: {error}"),
-            }
-        }
-    };
+    let (_chromedriver, client) = browser().await;
 
     client
         .goto(&format!("{base}/?token={token}"))
@@ -406,4 +405,283 @@ async fn floating_windows_type_on_client_and_browser() {
     );
 
     client.close().await.expect("close browser session");
+}
+
+async fn wait_js(client: &fantoccini::Client, expression: &str) {
+    let deadline = Instant::now() + UI_TIMEOUT;
+    loop {
+        if client
+            .execute(&format!("return !!({expression})"), vec![])
+            .await
+            .ok()
+            == Some(Value::Bool(true))
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "browser condition timed out: {expression}; page: {:?}",
+            client
+                .execute("return document.body.innerText", vec![])
+                .await
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs chromium + chromedriver + xvfb-run"]
+async fn encrypted_sessions_unlock_roundtrip_and_replay() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let bin = env!("CARGO_BIN_EXE_tcomp");
+    let (mut host, base, token) = spawn_standalone_mode(bin, "private-encrypted-name", true);
+    let key = host.key.clone().expect("key in watch fragment");
+    let plain = spawn_remote(bin, &base, &token, "ordinary-session");
+    host.type_line("printf 'secret-terminal-output\\n'");
+    let (_driver, client) = browser().await;
+    let session_url = format!("{base}/s/{}", host.id);
+    client
+        .goto(&format!("{session_url}?token={token}"))
+        .await
+        .unwrap();
+    wait_js(
+        &client,
+        "document.getElementById('notice').textContent.includes('complete watch link')",
+    )
+    .await;
+    assert_eq!(
+        client.execute("return allowInput", vec![]).await.unwrap(),
+        false
+    );
+    client
+        .goto(&format!("{session_url}#key={}", "A".repeat(43)))
+        .await
+        .unwrap();
+    client.refresh().await.unwrap();
+    wait_js(
+        &client,
+        "document.getElementById('notice').textContent.includes('wrong key')",
+    )
+    .await;
+    client
+        .goto(&format!("{session_url}#key={key}"))
+        .await
+        .unwrap();
+    client.refresh().await.unwrap();
+    wait_js(
+        &client,
+        "document.getElementById('name').textContent === 'private-encrypted-name' && allowInput",
+    )
+    .await;
+    wait_js(
+        &client,
+        "document.querySelector('.xterm-rows').textContent.includes('secret-terminal-output')",
+    )
+    .await;
+    client
+        .execute(
+            "send(\"printf 'browser-secret-%s\\\\n' 'roundtrip'\\r\")",
+            vec![],
+        )
+        .await
+        .unwrap();
+    wait_until(
+        || host.stdout_contains("browser-secret-roundtrip"),
+        UI_TIMEOUT,
+        "encrypted browser input",
+    );
+    client.execute("socket.close()", vec![]).await.unwrap();
+    wait_js(
+        &client,
+        "socket.readyState === WebSocket.OPEN && allowInput",
+    )
+    .await;
+    wait_js(
+        &client,
+        "document.querySelector('.xterm-rows').textContent.includes('browser-secret-roundtrip')",
+    )
+    .await;
+    let sessions = client
+        .execute_async(
+            "const done = arguments[0]; fetch('/api/sessions').then(r => r.json()).then(done)",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let sessions = sessions.as_array().unwrap();
+    let encrypted = sessions.iter().find(|s| s["id"] == host.id).unwrap();
+    assert_eq!(encrypted["encryption"], 2);
+    assert_eq!(encrypted["preview"], "");
+    assert_eq!(encrypted["cmd"], "");
+    assert!(!encrypted.to_string().contains("private-encrypted-name"));
+    assert!(!encrypted.to_string().contains("secret-terminal-output"));
+    assert!(!encrypted.to_string().contains(&key));
+    assert!(sessions
+        .iter()
+        .any(|s| s["id"] == plain.id && s["name"] == "ordinary-session"));
+    client.goto(&base).await.unwrap();
+    wait_js(
+        &client,
+        "document.body.innerText.includes('End-to-end encrypted')",
+    )
+    .await;
+    client.goto(&session_url).await.unwrap();
+    wait_js(
+        &client,
+        "document.getElementById('name').textContent === 'private-encrypted-name' && allowInput",
+    )
+    .await;
+    client.delete_all_cookies().await.unwrap();
+    client
+        .execute("sessionStorage.clear()", vec![])
+        .await
+        .unwrap();
+    client
+        .goto(&format!("{session_url}#key={key}"))
+        .await
+        .unwrap();
+    client.refresh().await.unwrap();
+    client
+        .find(Locator::Css("#token"))
+        .await
+        .unwrap()
+        .send_keys("wrong-token")
+        .await
+        .unwrap();
+    client
+        .find(Locator::Css("button[type=submit]"))
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_js(
+        &client,
+        "new URLSearchParams(location.search).has('bad') && document.readyState === 'complete'",
+    )
+    .await;
+    client
+        .find(Locator::Css("#token"))
+        .await
+        .unwrap()
+        .send_keys(&token)
+        .await
+        .unwrap();
+    client
+        .find(Locator::Css("button[type=submit]"))
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_js(
+        &client,
+        "document.getElementById('name').textContent === 'private-encrypted-name' && allowInput",
+    )
+    .await;
+    assert!(!client
+        .current_url()
+        .await
+        .unwrap()
+        .query()
+        .unwrap_or_default()
+        .contains(&key));
+    let vector = client.execute_async(r#"
+        const [encoded, done] = arguments;
+        (async () => {
+          const raw = Uint8Array.from(atob(encoded.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0));
+          const key = TcompCrypto.encode(new Uint8Array(32).fill(7));
+          const cipher = await TcompCrypto.create(key, 'vector-session');
+          const payload = await cipher.open(raw);
+          if (payload.screen !== 'hello €') throw new Error('vector mismatch');
+          if (await cipher.open(raw) !== null) throw new Error('replay accepted');
+          for (const kind of ['tamper', 'version', 'short', 'session', 'key']) {
+            const candidate = kind === 'short' ? raw.slice(0, 10) : raw.slice();
+            if (kind === 'tamper') candidate[candidate.length - 1] ^= 1;
+            if (kind === 'version') candidate[4] = 2;
+            const reader = await TcompCrypto.create(kind === 'key' ? TcompCrypto.encode(new Uint8Array(32).fill(8)) : key, kind === 'session' ? 'other' : 'vector-session');
+            let rejected = false;
+            try { await reader.open(candidate); } catch (_) { rejected = true; }
+            if (!rejected) throw new Error(kind + ' accepted');
+          }
+          return true;
+        })().then(done, error => done(error.message));
+    "#, vec![Value::String(include_str!("../src/crypto-vector.txt").trim().into())]).await.unwrap();
+    assert_eq!(vector, true);
+    let reinitialize = client.execute_async(r#"
+        const done = arguments[0];
+        const original = cipher;
+        receive(socket, { data: JSON.stringify({ t: 'init', encryption: 2 }) }).then(
+          () => done('accepted repeated initialization'),
+          error => done(error.message === 'Unexpected session reinitialization.' && cipher === original),
+        );
+    "#, vec![]).await.unwrap();
+    assert_eq!(reinitialize, true);
+    let mut remote = spawn_remote_mode(bin, &base, &token, "private-remote-name", true);
+    let remote_url = format!(
+        "{base}/s/{}#key={}",
+        remote.id,
+        remote.key.as_ref().unwrap()
+    );
+    remote.type_line("printf '\\033[?1049h\\033[2J\\033[Halternate-screen-secret'");
+    client.goto(&remote_url).await.unwrap();
+    wait_js(&client, "document.querySelector('.xterm-rows').textContent.includes('alternate-screen-secret') && allowInput").await;
+    remote.type_line("printf '\\033[?1049l'; printf '\\033]0;private-title\\007'");
+    wait_js(
+        &client,
+        "document.getElementById('name').textContent === 'private-title'",
+    )
+    .await;
+    client.refresh().await.unwrap();
+    wait_js(
+        &client,
+        "document.getElementById('name').textContent === 'private-title' && allowInput",
+    )
+    .await;
+    remote.type_line("printf 'final-encrypted-output\\n'; exit 7");
+    wait_js(
+        &client,
+        "status === 'ended' && document.getElementById('notice').textContent.includes('exit 7')",
+    )
+    .await;
+    client.refresh().await.unwrap();
+    wait_js(&client, "status === 'ended' && document.querySelector('.xterm-rows').textContent.includes('final-encrypted-output')").await;
+    client.close().await.unwrap();
+}
+
+async fn browser() -> (Guarded, fantoccini::Client) {
+    let chromedriver_port = free_port();
+    let mut chromedriver = Command::new("xvfb-run");
+    chromedriver
+        .args([
+            "-a",
+            "-s",
+            "-screen 0 1280x900x24",
+            "chromedriver",
+            &format!("--port={chromedriver_port}"),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let _chromedriver = Guarded::spawn(&mut chromedriver);
+
+    let client = {
+        let deadline = Instant::now() + BOOT_TIMEOUT;
+        loop {
+            match ClientBuilder::rustls()
+                .expect("rustls tls backend")
+                .capabilities(chromedriver_capabilities())
+                .connect(&format!("http://127.0.0.1:{chromedriver_port}"))
+                .await
+            {
+                Ok(client) => break client,
+                Err(error) if Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    let _ = error;
+                }
+                Err(error) => panic!("could not connect to chromedriver: {error}"),
+            }
+        }
+    };
+
+    (_chromedriver, client)
 }

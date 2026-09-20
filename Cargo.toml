@@ -44,6 +44,8 @@ avt = "0.18"
 axum = { version = "0.8", features = ["ws"] }
 dashmap = "6.2.1"
 rand = "0.10.2"
+ring = "0.17"
+base64 = "0.22"
 tower-http = { version = "0.7.1", features = ["fs", "trace"] }
 
 [dev-dependencies]

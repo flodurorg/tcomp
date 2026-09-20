@@ -1,5 +1,8 @@
+mod crypto;
+mod encrypted;
 mod modes;
 mod relay;
+mod screen;
 mod server;
 mod term;
 
@@ -44,6 +47,14 @@ struct Cli {
     /// Exit when the command exits instead of offering to restart it
     #[arg(long, env = "TCOMP_EXIT_ON_END", global = true)]
     exit_on_end: bool,
+
+    #[arg(
+        long,
+        env = "TCOMP_ENCRYPT",
+        global = true,
+        help = "Encrypt the session end to end"
+    )]
+    encrypt: bool,
 
     #[arg(last = true)]
     cmd: Vec<String>,
@@ -124,8 +135,15 @@ fn main() -> Result<()> {
                 bind: listen_addr(bind),
                 public_url: server::config::normalize_public_url(&public_url.unwrap_or_default()),
             };
-            let code =
-                runtime.block_on(run_pty(cmd, mode, name, token, allow_input, exit_on_end))?;
+            let code = runtime.block_on(run_pty(
+                cmd,
+                mode,
+                name,
+                token,
+                allow_input,
+                exit_on_end,
+                cli.encrypt,
+            ))?;
             term::restore();
             std::process::exit(code);
         }
@@ -151,6 +169,7 @@ fn main() -> Result<()> {
                 token,
                 cli.allow_input,
                 cli.exit_on_end,
+                cli.encrypt,
             ))?;
             term::restore();
             std::process::exit(code);
@@ -283,7 +302,9 @@ async fn run_pty(
     token: Option<String>,
     allow_input: bool,
     exit_on_end: bool,
+    encrypt: bool,
 ) -> Result<i32> {
+    let key = encrypt.then(crypto::Key::generate).transpose()?;
     let (cols, rows) = term::size();
     let cwd = std::env::current_dir().ok();
 
@@ -356,6 +377,7 @@ async fn run_pty(
                 cols,
                 rows,
                 input: allow_input,
+                key,
             };
             let writes = allow_input.then_some(writes_tx.clone());
             tokio::spawn(relay::run(params, events_rx, writes))

@@ -233,6 +233,7 @@
 </nav>
 
 <script src="/static/xterm.js"></script>
+<script src="/static/crypto.js"></script>
 <script>
 const id = location.pathname.split('/').filter(Boolean).pop();
 const stage = document.getElementById('stage');
@@ -315,6 +316,14 @@ let sessionName = '';
 let sessionCmd = '';
 let sessionTitle = '';
 let sessionCwd = '';
+let encrypted = false;
+let cipher = null;
+let initializedSocket = null;
+let authenticatedInput = false;
+let authenticatedExit = null;
+let cryptoFailed = false;
+let inputQueue = Promise.resolve();
+let outputQueue = Promise.resolve();
 let keybarOpen = loadKeybarPreference();
 let touchId = null;
 let touchX = 0;
@@ -377,8 +386,15 @@ function ensureTerminal() {
 
 function send(data) {
   if (!allowInput || status !== 'live' || !data) return;
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(encoder.encode(data));
+  if (socket && initializedSocket === socket && socket.readyState === WebSocket.OPEN) {
+    const ws = socket;
+    if (!encrypted) return ws.send(encoder.encode(data));
+    const inputCipher = cipher;
+    inputQueue = inputQueue.then(async () => {
+      if (cryptoFailed || socket !== ws || cipher !== inputCipher || !allowInput || status !== 'live' || ws.readyState !== WebSocket.OPEN) return;
+      const frame = await inputCipher.input(encoder.encode(data));
+      if (!cryptoFailed && socket === ws && cipher === inputCipher && allowInput && status === 'live' && ws.readyState === WebSocket.OPEN) ws.send(frame);
+    }).catch(error => { if (socket === ws) encryptionError(error); });
   }
 }
 
@@ -546,23 +562,115 @@ async function signedOut() {
   }
 }
 
+function encryptionError(error) {
+  cryptoFailed = true;
+  allowInput = false;
+  applyInput(false);
+  if (socket) socket.close();
+  badge.className = 'badge stale';
+  badge.textContent = 'locked';
+  notice.textContent = error.message || 'Encrypted session failed.';
+  notice.classList.add('show');
+  document.body.classList.add('frozen');
+}
+
+function writeTerminal(bytes) {
+  return new Promise(resolve => term.write(bytes, resolve));
+}
+
+async function receive(ws, event) {
+  if (socket !== ws || cryptoFailed) return;
+  if (typeof event.data === 'string') {
+    const frame = JSON.parse(event.data);
+    if (frame.t === 'init') {
+      if (initializedSocket === ws) throw new Error('Unexpected session reinitialization.');
+      const key = TcompCrypto.load(id);
+      if ((key || encrypted) && frame.encryption == null) throw new Error('Relay attempted to downgrade an encrypted session.');
+      encrypted = frame.encryption != null;
+      if (encrypted) {
+        if (frame.encryption !== 2) throw new Error('Unsupported session encryption version.');
+        if (!key) throw new Error('Encrypted session. Open the complete watch link, including #key=…');
+        cipher = await TcompCrypto.create(key, id);
+        if (socket !== ws || cryptoFailed) return;
+        authenticatedInput = false;
+        authenticatedExit = null;
+        onControl({ ...frame, input: false, name: 'Encrypted session', cmd: '', title: '', cwd: '' });
+        notice.textContent = 'Waiting for an encrypted snapshot…';
+        notice.classList.add('show');
+      } else {
+        onControl(frame);
+      }
+      initializedSocket = ws;
+    } else if (initializedSocket !== ws) {
+      throw new Error('Session data arrived before initialization.');
+    } else if (encrypted) {
+      if (frame.t === 'status' || frame.t === 'exit') {
+        allowInput = authenticatedInput;
+        applyStatus(authenticatedExit !== null ? 'ended' : frame.t === 'exit' ? 'ended' : frame.status, authenticatedExit);
+      } else if (frame.t === 'replay_unavailable') {
+        allowInput = false;
+        applyInput(false);
+        notice.textContent = 'Encrypted replay unavailable. Waiting for a fresh host snapshot…';
+        notice.classList.add('show');
+      } else {
+        throw new Error('Unexpected plaintext control for an encrypted session.');
+      }
+    } else {
+      onControl(frame);
+    }
+    return;
+  }
+  if (initializedSocket !== ws) throw new Error('Session data arrived before initialization.');
+  if (encrypted) {
+    const frame = await cipher.open(event.data);
+    if (!frame || socket !== ws || cryptoFailed) return;
+    ensureTerminal();
+    if (frame.t === 'snapshot') {
+      cols = frame.cols;
+      rows = frame.rows;
+      sessionName = frame.name;
+      sessionCmd = frame.cmd;
+      sessionTitle = frame.title || '';
+      sessionCwd = frame.cwd || '';
+      authenticatedInput = frame.input;
+      authenticatedExit = frame.exit;
+      allowInput = authenticatedInput;
+      renderDetails();
+      term.resize(cols, rows);
+      term.reset();
+      await writeTerminal(encoder.encode(frame.screen));
+      if (frame.carry.length) await writeTerminal(new Uint8Array(frame.carry));
+      if (socket !== ws || cryptoFailed) return;
+      applyStatus(authenticatedExit !== null ? 'ended' : status, authenticatedExit);
+      scheduleFit();
+    } else {
+      await writeTerminal(new Uint8Array(frame.bytes));
+    }
+  } else {
+    if (TcompCrypto.load(id)) throw new Error('Refusing plaintext output for a keyed session.');
+    ensureTerminal();
+    term.write(new Uint8Array(event.data));
+  }
+}
+
 function connect() {
+  if (cryptoFailed) return;
+  applyInput(false);
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${scheme}://${location.host}/ws/view/${id}`);
   ws.binaryType = 'arraybuffer';
 
-  ws.onmessage = (event) => {
-    if (typeof event.data === 'string') {
-      try { onControl(JSON.parse(event.data)); } catch (_) {}
-    } else {
-      ensureTerminal();
-      term.write(new Uint8Array(event.data));
-    }
+  ws.onmessage = event => {
+    outputQueue = outputQueue.then(() => receive(ws, event)).catch(error => { if (socket === ws) encryptionError(error); });
   };
   socket = ws;
   ws.onopen = () => { backoff = 500; };
   ws.onclose = async () => {
+    if (socket !== ws || cryptoFailed) return;
+    allowInput = false;
+    applyInput(false);
     if (await signedOut()) return void location.reload();
+    if (cryptoFailed || socket !== ws) return;
     if (++failures >= 3) {
       badge.className = 'badge stale';
       badge.textContent = 'gone';

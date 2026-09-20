@@ -281,9 +281,9 @@ set `httpRoute.timeouts.request=0s` if viewers drop.
 
 ## Security
 
-**A relay is only as private as its token.** Anyone holding it sees everything
-the command prints — file contents, tokens, keys — and on an `--allow-input`
-session can type into your terminal as you.
+**Unencrypted sessions are only as private as the relay and its token.** Anyone
+holding the token sees everything the command prints — file contents, tokens,
+keys — and on an `--allow-input` session can type into your terminal as you.
 
 `tcomp standalone` mints a fresh token per run and carries it in the printed
 watch URL, so an embedded relay is never open — not even when you `--bind` it to
@@ -310,6 +310,57 @@ typo in the path can never start a relay that is wide open.
 implements is one shared token: access is all-or-nothing, with no per-session
 scope and no separate read-only credential.
 
+### End-to-end encryption
+
+Encryption is opt-in and works alongside ordinary sessions on the same relay:
+
+```sh
+tcomp --encrypt --relay https://tcomp.example.com --token-file ~/.config/tcomp/token -- bash
+tcomp standalone --encrypt --allow-input -- bash
+```
+
+`--encrypt` (or `TCOMP_ENCRYPT=true`) generates a fresh 256-bit key for that
+session. The printed watch link ends in `#key=…`; share the **complete link**.
+The browser handles the fragment locally: the key is never included in HTTP
+requests, cookies, relay logs or WebSocket messages. The relay token is still
+required independently. Losing the link loses access to the encrypted session;
+there is no server-side key recovery. Restarting the wrapper creates a new key.
+
+Terminal output, input, names, commands, titles and working directories are
+encrypted with AES-256-GCM, with HKDF-SHA-256 separating stream and writer keys.
+The host authenticates input and rejects duplicates and input from previous
+producer connections. Encryption never falls back to plaintext if the relay or
+browser does not support it. Upgrade the relay and its `web/` assets together.
+
+The dashboard shows generic encrypted cards without previews. Opening a keyed
+link unlocks its session; the browser remembers keys in session storage for
+reloads and same-tab dashboard navigation, not in persistent local storage.
+On another device or in a new browser session, open the complete link again.
+Anyone with the key and relay access can read that session and, if the host
+used `--allow-input`, type into it. There is no separate read-only key.
+
+Browser encryption needs **HTTPS or localhost**. A plain-HTTP tailnet IP is not
+a secure browser context: use `tailscale serve` with `--public-url` as above.
+Continue using HTTPS/WSS even with encryption to protect authentication and the
+viewer code. Protect watch links like passwords, including browser history,
+clipboard contents and any place you paste them.
+
+The relay stores encrypted snapshots and deltas, bounded by
+`TCOMP_HISTORY_BYTES`. The producer, rather than the relay, maintains the terminal
+screen and 2,000 lines of scrollback. Late joins and reconnects restore a snapshot;
+a snapshot too large for the relay's budget stops encrypted sharing with an
+explicit warning rather than sending plaintext or incomplete history. The local
+command keeps running. Increase the relay's history budget for larger screens.
+
+Encryption hides content from relay storage and transport inspection, **not from
+malicious viewer JavaScript**: the relay serves the browser application, so a
+compromised relay can serve code that steals the key. Use a trusted viewer origin.
+Session IDs, lifecycle, input permission, connection addresses, handshake terminal
+dimensions, traffic sizes and timing remain visible. A relay can withhold data or
+replay old history to a newly opened viewer; content encryption does not prove
+freshness. This does not provide forward secrecy or protect compromised endpoints
+or against someone who has the session key.
+
 ## Parameters
 
 Session flags, each with an environment equivalent:
@@ -319,6 +370,7 @@ Session flags, each with an environment equivalent:
 | `--relay`       | `TCOMP_RELAY`       | relay base URL; required unless `standalone`               |
 | `--name`        | `TCOMP_NAME`        | label in the web UI (default: hostname)                    |
 | `--allow-input` | `TCOMP_ALLOW_INPUT` | let the browser type into this terminal                    |
+| `--encrypt`     | `TCOMP_ENCRYPT`     | encrypt this session end to end (off by default)           |
 | `--exit-on-end` | `TCOMP_EXIT_ON_END` | exit when the command exits, instead of offering a restart |
 | `--token`       | `TCOMP_TOKEN`       | token to present to the relay                              |
 | `--token-file`  | `TCOMP_TOKEN_FILE`  | file to read that token from instead                       |

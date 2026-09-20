@@ -36,10 +36,26 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
         return;
     }
 
+    if hello
+        .resume
+        .as_ref()
+        .and_then(|id| app.store.get(id))
+        .is_some_and(|session| session.encrypted() != (hello.v == proto::ENCRYPTED_VERSION))
+    {
+        let _ = sink
+            .send(Message::Close(Some(CloseFrame {
+                code: close_code::POLICY,
+                reason: "session encryption mode cannot change".into(),
+            })))
+            .await;
+        return;
+    }
     let (session, epoch) = attach(&app, &hello);
     let ack = proto::HelloAck {
         session: session.id.clone(),
         url: app.config.session_url(&session.id),
+        encryption: session.encrypted().then_some(proto::ENCRYPTED_VERSION),
+        history_bytes: session.encrypted().then_some(app.config.history_bytes),
     };
     if sink
         .send(Message::Text(
@@ -58,17 +74,18 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
         "producer attached"
     );
 
-    // Banner is shown to every viewer, including ones that join later.
-    session.set_banner(format!(
-        "{} · {}{}",
-        hello.name,
-        hello.cmd,
-        if hello.input {
-            " · accepting input"
-        } else {
-            ""
-        }
-    ));
+    if !session.encrypted() {
+        session.set_banner(format!(
+            "{} · {}{}",
+            hello.name,
+            hello.cmd,
+            if hello.input {
+                " · accepting input"
+            } else {
+                ""
+            }
+        ));
+    }
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
     session.attach_input(epoch, input_tx);
@@ -90,7 +107,7 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
         }
     });
 
-    let clean_exit = pump(&session, &mut stream, app.config.producer_timeout).await;
+    let clean_exit = pump(&session, epoch, &mut stream, app.config.producer_timeout).await;
 
     downstream.abort();
     session.detach_input(epoch);
@@ -104,6 +121,7 @@ async fn handle(app: App, headers: HeaderMap, socket: WebSocket) {
 
 async fn pump(
     session: &Arc<Session>,
+    epoch: u64,
     stream: &mut SplitStream<WebSocket>,
     timeout: Duration,
 ) -> bool {
@@ -117,17 +135,30 @@ async fn pump(
                 break;
             }
         };
+        if session.epoch() != epoch {
+            break;
+        }
         match message {
+            Message::Binary(bytes) if session.encrypted() => {
+                if !session.feed_encrypted(epoch, bytes) {
+                    break;
+                }
+            }
             Message::Binary(bytes) => session.feed(bytes),
             Message::Text(text) => match serde_json::from_str::<proto::Producer>(&text) {
-                Ok(proto::Producer::Resize { cols, rows }) => session.resize(cols, rows),
-                Ok(proto::Producer::Title { text }) => session.set_title(text),
-                Ok(proto::Producer::Cwd { path }) => session.set_cwd(path),
+                Ok(proto::Producer::Resize { cols, rows }) if !session.encrypted() => {
+                    session.resize(cols, rows)
+                }
+                Ok(proto::Producer::Title { text }) if !session.encrypted() => {
+                    session.set_title(text)
+                }
+                Ok(proto::Producer::Cwd { path }) if !session.encrypted() => session.set_cwd(path),
                 Ok(proto::Producer::Exit { code }) => {
                     session.mark_exit(code);
                     clean_exit = true;
                 }
-                Err(error) => tracing::debug!(%error, "bad producer control frame"),
+                Ok(_) => break,
+                Err(_) => tracing::debug!("bad producer control frame"),
             },
             Message::Close(_) => break,
             _ => {}
@@ -142,18 +173,23 @@ fn attach(app: &App, hello: &proto::Hello) -> (Arc<Session>, u64) {
         tracing::info!(session = %existing.id, "producer resumed");
         return (existing, epoch);
     }
-    let session = Arc::new(Session::new(
-        new_id(),
-        hello.name.clone(),
-        hello.cmd.clone(),
-        hello.cols,
-        hello.rows,
-        hello.input,
-        &app.config,
-    ));
-    if let Some(cwd) = &hello.cwd {
-        session.set_cwd(cwd.clone());
-    }
+    let session = Arc::new(if hello.v == proto::ENCRYPTED_VERSION {
+        Session::new_encrypted(new_id(), hello.input, &app.config)
+    } else {
+        let session = Session::new(
+            new_id(),
+            hello.name.clone(),
+            hello.cmd.clone(),
+            hello.cols,
+            hello.rows,
+            hello.input,
+            &app.config,
+        );
+        if let Some(cwd) = &hello.cwd {
+            session.set_cwd(cwd.clone());
+        }
+        session
+    });
     app.store.insert(session.clone());
     let epoch = session.epoch();
     (session, epoch)
@@ -162,7 +198,14 @@ fn attach(app: &App, hello: &proto::Hello) -> (Arc<Session>, u64) {
 async fn read_hello(stream: &mut SplitStream<WebSocket>) -> Option<proto::Hello> {
     match stream.next().await {
         Some(Ok(Message::Text(text))) => match serde_json::from_str::<proto::Hello>(&text) {
-            Ok(hello) if hello.v == proto::VERSION => Some(hello),
+            Ok(mut hello) if matches!(hello.v, proto::VERSION | proto::ENCRYPTED_VERSION) => {
+                if hello.v == proto::ENCRYPTED_VERSION {
+                    hello.name = "Encrypted session".into();
+                    hello.cmd.clear();
+                    hello.cwd = None;
+                }
+                Some(hello)
+            }
             Ok(hello) => {
                 tracing::warn!(version = hello.v, "unsupported producer protocol version");
                 None
