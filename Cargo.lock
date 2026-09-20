@@ -113,7 +113,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -166,6 +166,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bitflags"
@@ -547,7 +553,7 @@ version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7737298823a6f9ca743e372e8cb03658d55354fbab843424f575706ba9563046"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "cookie 0.18.2",
  "http 1.5.0",
  "http-body-util",
@@ -1788,7 +1794,7 @@ dependencies = [
  "anyhow",
  "avt",
  "axum",
- "base64",
+ "base64 0.23.1",
  "bytes",
  "clap",
  "crossterm",
@@ -2243,7 +2249,7 @@ version = "0.53.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91d53921e1bef27512fa358179c9a22428d55778d2c2ae3c5c37a52b82ce6e92"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "cookie 0.16.2",
  "http 0.2.12",
