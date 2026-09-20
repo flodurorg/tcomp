@@ -1,6 +1,9 @@
 # tcomp — take your terminals on the go
 
-Start a session on your laptop and carry on with it from anywhere.
+Start a session on your laptop and carry on with it from anywhere. Two shapes,
+one binary: the relay either rides along with the command on the machine you are
+already on, or runs somewhere of its own that both the command and the browser
+can reach.
 
 ![selecting one of several floating session windows and typing on both the terminal and the browser](docs/demo.gif)
 
@@ -35,18 +38,18 @@ would not hand a shell to.
 tcomp standalone --allow-input -- claude
 ```
 
-## Taking over an existing terminal
+## Installing the client
 
-```sh
-echo $$ # Shell PID of the terminal to take over; alternatively use ps.
-tcomp standalone --allow-input -- reptyr -T <PID>
-# Press Ctrl-L to redraw the transferred terminal.
-```
+The client is the wrapper — it runs your command under a pty and mirrors it
+out, whether the relay is embedded (`standalone`) or somewhere else
+(`--relay`). Releases are built for Linux only, `x86_64` and `aarch64`, linked
+against musl, so there is no libc to match. Anywhere else, build it from the
+flake.
 
-## Installing
+### Nix
 
-**nix** — the flake exposes the binary as `packages.default` and carries `web/`
-along with it, so the viewer is served wherever you run it from.
+The flake exposes the binary as `packages.default` and carries `web/` along with
+it, so the viewer is served wherever you run it from.
 
 ```sh
 nix run github:flodurorg/tcomp -- standalone -- claude
@@ -62,6 +65,219 @@ environment.systemPackages = [
   inputs.tcomp.packages.${pkgs.stdenv.hostPlatform.system}.default
 ];
 ```
+
+### Release tarball
+
+Every tag ships both architectures with a `.sha256` beside them:
+
+```sh
+VERSION=v0.6.0
+TARGET=x86_64-unknown-linux-musl # or aarch64-unknown-linux-musl
+BASE=https://github.com/flodurorg/tcomp/releases/download/$VERSION
+
+curl -fsSLO "$BASE/tcomp-$VERSION-$TARGET.tar.gz"
+curl -fsSLO "$BASE/tcomp-$VERSION-$TARGET.tar.gz.sha256"
+sha256sum -c "tcomp-$VERSION-$TARGET.tar.gz.sha256"
+tar xzf "tcomp-$VERSION-$TARGET.tar.gz"
+```
+
+The archive holds the binary and the `web/` that `standalone`'s embedded relay
+serves, so keep the two together and link to the binary rather than copying it
+out — the lookup follows the symlink:
+
+```sh
+sudo mv "tcomp-$VERSION-$TARGET" /opt/tcomp
+sudo ln -sf /opt/tcomp/tcomp /usr/local/bin/tcomp
+```
+
+A machine that only ever dials out to someone else's relay serves no viewer of
+its own, and the binary alone is the whole wrapper:
+
+```sh
+sudo install -Dm755 "tcomp-$VERSION-$TARGET/tcomp" /usr/local/bin/tcomp
+tcomp --relay https://tcomp.example.com -- claude
+```
+
+## Taking over an existing terminal
+
+```sh
+echo $$ # Shell PID of the terminal to take over; alternatively use ps.
+tcomp standalone --allow-input -- reptyr -T <PID>
+# Press Ctrl-L to redraw the transferred terminal.
+```
+
+## Standalone behind Tailscale
+
+The relay is embedded in the wrapper: it starts with the command, mints a token
+for that run, and dies with it. Nothing is deployed, nothing outlives the
+session, and the tailnet is what makes it reachable.
+
+```mermaid
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 45, "rankSpacing": 70}}}%%
+flowchart LR
+  subgraph host["your laptop"]
+    direction LR
+    cmd(["claude"]) <-- pty --> relay(["tcomp standalone<br>embedded relay"])
+  end
+  relay <-- "wss · tailnet only" --> browser(["browser<br>phone, tablet, laptop"])
+
+  classDef proc fill:none,stroke:#2a78d6,stroke-width:2px
+  classDef viewer fill:none,stroke:#199e70,stroke-width:2px
+  classDef yours fill:none,stroke:#8b949e,stroke-width:2px
+  classDef host fill:none,stroke:#8b949e,stroke-width:1px,stroke-dasharray:4 4
+  class relay proc
+  class cmd yours
+  class browser viewer
+  class host host
+  style relay stroke-width:3px
+```
+
+Bind the tailnet address and the printed URL — token and all — works from any
+device on the tailnet:
+
+```sh
+tcomp standalone --bind "$(tailscale ip -4)" -- claude
+```
+
+That is plain HTTP on a random port, at an address nobody remembers. For TLS and
+a stable name, leave the relay on loopback and put `tailscale serve` in front of
+it instead. Pin the port, since the default is random, and set `--public-url` so
+the printed link points at the name Tailscale answers on rather than at
+loopback:
+
+```sh
+tailscale serve --bg 8080
+tcomp standalone \
+  --bind 127.0.0.1:8080 \
+  --public-url https://laptop.tailnet.ts.net \
+  -- claude
+```
+
+Never `tailscale funnel` a session. Funnel publishes it to the internet, where
+the token in the URL is the only thing between a stranger and your terminal.
+
+## Installing the server
+
+Same binary, other end: `tcomp serve`. This is where its artifacts come from;
+[Running a relay](#running-a-relay) covers the shapes it runs in.
+
+### Container image
+
+`ghcr.io/flodurorg/tcomp` is multi-arch for `linux/amd64` and `linux/arm64`,
+tagged `latest`, `0.6` and `0.6.0`. Pin the full version anywhere it matters;
+`latest` moves under you. `tcomp serve` is the entrypoint, so the image is a
+relay and never the wrapper.
+
+```sh
+docker run --rm -p 8080:8080 \
+  -e TCOMP_TOKEN="$(openssl rand -hex 16)" \
+  -e TCOMP_PUBLIC_URL=https://tcomp.example.com \
+  ghcr.io/flodurorg/tcomp:0.6.0
+```
+
+Compose builds from your checkout rather than pulling this image; the Helm
+chart pulls it.
+
+### Nix or the tarball
+
+Both carry the viewer the relay serves, but `tcomp serve` will not go looking
+for it the way `standalone` does — it reads `TCOMP_WEB_DIR`, or `./web`
+relative to where you started it, and answers 500 if neither is there. The nix
+package sets the variable for you; from a tarball, point it at the directory
+you extracted:
+
+```sh
+TCOMP_WEB_DIR=/opt/tcomp/web TCOMP_TOKEN=$(openssl rand -hex 16) tcomp serve
+```
+
+## Running a relay
+
+One `tcomp serve` that outlives any single session, with wrappers dialling _out_
+to it. The machine running the command opens no inbound port, which is what
+makes this work from behind NAT, on a customer network, or anywhere you cannot
+put a tailnet.
+
+```mermaid
+%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 45, "rankSpacing": 70}}}%%
+flowchart LR
+  subgraph l["laptop"]
+    cmd1(["claude"]) <-- pty --> w1(["tcomp --relay"])
+  end
+  subgraph v["VPN box"]
+    cmd2(["htop"]) <-- pty --> w2(["tcomp --relay"])
+  end
+  subgraph c["CI runner"]
+    cmd3(["deploy"]) <-- pty --> w3(["tcomp --relay"])
+  end
+  subgraph rh["docker · kubernetes"]
+    relay(["tcomp serve"])
+  end
+  w1 <-- "wss out" --> relay
+  w2 <-- "wss out" --> relay
+  w3 <-- "wss out" --> relay
+  relay <-- https --> browser(["browser<br>phone, tablet, laptop"])
+
+  classDef proc fill:none,stroke:#2a78d6,stroke-width:2px
+  classDef viewer fill:none,stroke:#199e70,stroke-width:2px
+  classDef yours fill:none,stroke:#8b949e,stroke-width:2px
+  classDef host fill:none,stroke:#8b949e,stroke-width:1px,stroke-dasharray:4 4
+  class w1,w2,w3,relay proc
+  class cmd1,cmd2,cmd3 yours
+  class browser viewer
+  class l,v,c,rh host
+  style relay stroke-width:3px
+```
+
+Wrappers and viewers present the same token, so set one: a relay started without
+`TCOMP_TOKEN` is open to everyone who can reach it. Sessions live in the relay's
+memory, which is why it runs as a single replica and why restarting it drops
+every session instead of moving it.
+
+```sh
+tcomp --relay https://tcomp.example.com \
+  --token-file ~/.config/tcomp/token \
+  -- claude
+```
+
+### Docker compose
+
+Compose builds the image from your checkout, publishes `8080` and mounts `web/`
+read-only; set `TCOMP_PUBLIC_URL` to the address people will actually open.
+
+```sh
+TCOMP_PUBLIC_URL=https://tcomp.example.com docker compose up -d
+```
+
+### Kubernetes
+
+The chart in `charts/tcomp-chart` is published to
+`oci://ghcr.io/flodurorg/tcomp/tcomp-chart` and runs one replica, because
+sessions live in memory and are not shared between pods. `image.tag` follows the
+chart's `appVersion`, so a release ships a chart that pins its own image.
+
+```sh
+helm install tcomp oci://ghcr.io/flodurorg/tcomp/tcomp-chart \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=tcomp.example.com
+```
+
+A token is generated if you do not set one, and reused on upgrade. Read it with
+`kubectl get secret tcomp -o jsonpath='{.data.token}' | base64 -d`, or set
+`auth.token` / `auth.existingSecret` yourself.
+
+Gateway API works instead of an Ingress, and the two are independent:
+
+```sh
+helm install tcomp oci://ghcr.io/flodurorg/tcomp/tcomp-chart \
+  --set httpRoute.enabled=true \
+  --set httpRoute.parentRefs[0].name=my-gateway \
+  --set httpRoute.hostnames[0]=tcomp.example.com
+```
+
+`publicUrl` is derived from the first ingress host or `httpRoute` hostname when
+left empty; set it explicitly when a proxy sits in front. Some Gateway
+implementations apply a default request timeout that would cut the websocket;
+set `httpRoute.timeouts.request=0s` if viewers drop.
 
 ## Security
 
@@ -93,54 +309,6 @@ typo in the path can never start a relay that is wide open.
 `src/server/auth.rs` is still the single seam, and what it
 implements is one shared token: access is all-or-nothing, with no per-session
 scope and no separate read-only credential.
-
-## Deploying
-
-**tailnet** — `--bind` the tailnet address and the printed URL works from any
-device on the tailnet. For TLS and a stable `<machine>.<tailnet>.ts.net` name,
-leave the relay on loopback and put `tailscale serve --bg <port>` in front of it
-instead. Never `tailscale funnel` it.
-
-```sh
-tcomp standalone --bind "$(tailscale ip -4)" -- claude
-```
-
-**docker compose** — the image runs `tcomp serve`. Compose publishes `8080` and
-mounts `web/` read-only; set `TCOMP_PUBLIC_URL` to the address people will
-actually open.
-
-```sh
-TCOMP_PUBLIC_URL=https://tcomp.example.com docker compose up -d
-```
-
-**kubernetes** — the chart in `charts/tcomp-chart` is published to
-`oci://ghcr.io/flodurorg/tcomp/tcomp-chart` and runs one replica, because
-sessions live in memory and are not shared between pods. `image.tag` follows the
-chart's `appVersion`, so a release ships a chart that pins its own image.
-
-```sh
-helm install tcomp oci://ghcr.io/flodurorg/tcomp/tcomp-chart \
-  --set ingress.enabled=true \
-  --set ingress.hosts[0].host=tcomp.example.com
-```
-
-A token is generated if you do not set one, and reused on upgrade. Read it with
-`kubectl get secret tcomp -o jsonpath='{.data.token}' | base64 -d`, or set
-`auth.token` / `auth.existingSecret` yourself.
-
-Gateway API works instead of an Ingress, and the two are independent:
-
-```sh
-helm install tcomp oci://ghcr.io/flodurorg/tcomp/tcomp-chart \
-  --set httpRoute.enabled=true \
-  --set httpRoute.parentRefs[0].name=my-gateway \
-  --set httpRoute.hostnames[0]=tcomp.example.com
-```
-
-`publicUrl` is derived from the first ingress host or `httpRoute` hostname when
-left empty; set it explicitly when a proxy sits in front. Some Gateway
-implementations apply a default request timeout that would cut the websocket;
-set `httpRoute.timeouts.request=0s` if viewers drop.
 
 ## Parameters
 
