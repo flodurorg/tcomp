@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/flodurorg/tcomp/compare/v0.5.2...v0.6.0) (2026-09-20)
+
+
+### Features
+
+* **web:** light up a virtual key when its physical key is pressed ([d201f11](https://github.com/flodurorg/tcomp/commit/d201f1124752a10e19be170904b04e336c3b36cf))
+
 ## [0.5.2](https://github.com/flodurorg/tcomp/compare/v0.5.1...v0.5.2) (2026-09-16)
 
 
