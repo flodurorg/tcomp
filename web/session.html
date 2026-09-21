@@ -626,6 +626,12 @@ async function receive(ws, event) {
     if (!frame || socket !== ws || cryptoFailed) return;
     ensureTerminal();
     if (frame.t === 'snapshot') {
+      const resized = term.cols !== frame.cols || term.rows !== frame.rows;
+      const restore = frame.restore !== false || resized;
+      const detailsChanged = sessionName !== frame.name || sessionCmd !== frame.cmd
+        || sessionTitle !== (frame.title || '') || sessionCwd !== (frame.cwd || '');
+      const updateStatus = restore || allowInput !== frame.input || authenticatedExit !== frame.exit
+        || (status === 'live' && notice.classList.contains('show'));
       cols = frame.cols;
       rows = frame.rows;
       sessionName = frame.name;
@@ -635,14 +641,15 @@ async function receive(ws, event) {
       authenticatedInput = frame.input;
       authenticatedExit = frame.exit;
       allowInput = authenticatedInput;
-      renderDetails();
-      term.resize(cols, rows);
-      term.reset();
-      await writeTerminal(encoder.encode(frame.screen));
-      if (frame.carry.length) await writeTerminal(new Uint8Array(frame.carry));
-      if (socket !== ws || cryptoFailed) return;
-      applyStatus(authenticatedExit !== null ? 'ended' : status, authenticatedExit);
-      scheduleFit();
+      if (detailsChanged) renderDetails();
+      if (resized) term.resize(cols, rows);
+      if (restore) {
+        term.reset();
+        await writeTerminal(encoder.encode(frame.screen));
+        if (frame.carry.length) await writeTerminal(new Uint8Array(frame.carry));
+        if (socket !== ws || cryptoFailed) return;
+      }
+      if (updateStatus) applyStatus(authenticatedExit !== null ? 'ended' : status, authenticatedExit);
     } else {
       await writeTerminal(new Uint8Array(frame.bytes));
     }

@@ -291,6 +291,7 @@ mod tests {
             screen: "hello €".into(),
             carry: vec![],
             exit: None,
+            checkpoint: false,
         };
         let frame = sender
             .seal(SNAPSHOT, &serde_json::to_vec(&payload).unwrap())

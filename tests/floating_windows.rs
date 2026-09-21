@@ -490,6 +490,83 @@ async fn encrypted_sessions_unlock_roundtrip_and_replay() {
         UI_TIMEOUT,
         "encrypted browser input",
     );
+    host.type_line("for i in {1..80}; do printf 'scroll-line-%s\\n' \"$i\"; done");
+    wait_js(&client, "term.buffer.active.baseY > 50 && document.querySelector('.xterm-rows').textContent.includes('scroll-line-80')").await;
+    client
+        .execute(
+            r#"
+        window.checkpointStats = { snapshots: 0, resets: 0, fits: 0, focuses: 0 };
+        const open = cipher.open.bind(cipher);
+        cipher.open = async data => {
+          const frame = await open(data);
+          if (frame?.t === 'snapshot' && frame.checkpoint) checkpointStats.snapshots++;
+          return frame;
+        };
+        const reset = term.reset.bind(term);
+        term.reset = () => { checkpointStats.resets++; return reset(); };
+        const focus = term.focus.bind(term);
+        term.focus = () => { checkpointStats.focuses++; return focus(); };
+        const fit = scheduleFit;
+        scheduleFit = () => { checkpointStats.fits++; return fit(); };
+    "#,
+            vec![],
+        )
+        .await
+        .unwrap();
+    wait_js(&client, "checkpointStats.snapshots > 0").await;
+    client
+        .execute(
+            r#"
+        term.scrollToTop();
+        term.select(0, 1, 6);
+        document.querySelector('.back').focus();
+        window.checkpointState = {
+          scroll: term.buffer.active.viewportY,
+          selection: term.getSelection(),
+          font: term.options.fontSize,
+          focus: document.activeElement,
+        };
+        for (const key of Object.keys(checkpointStats)) checkpointStats[key] = 0;
+    "#,
+            vec![],
+        )
+        .await
+        .unwrap();
+    host.type_line("printf '\\033]0;checkpoint-title\\007'");
+    wait_js(
+        &client,
+        "sessionTitle === 'checkpoint-title' && checkpointStats.snapshots > 0",
+    )
+    .await;
+    for index in 0..2 {
+        client
+            .execute("checkpointStats.snapshots = 0", vec![])
+            .await
+            .unwrap();
+        host.type_line(&format!("printf 'checkpoint-output-{index}\\n'"));
+        wait_js(&client, "checkpointStats.snapshots > 0").await;
+    }
+    let stable = client.execute(r#"
+        return checkpointStats.resets === 0 && checkpointStats.fits === 0 && checkpointStats.focuses === 0
+          && term.buffer.active.viewportY === checkpointState.scroll
+          && term.getSelection() === checkpointState.selection && checkpointState.selection.length > 0
+          && term.options.fontSize === checkpointState.font && document.activeElement === checkpointState.focus;
+    "#, vec![]).await.unwrap();
+    assert_eq!(stable, true);
+    client
+        .execute(
+            "send(\"printf 'after-checkpoint-%s\\\\n' 'input'\\r\")",
+            vec![],
+        )
+        .await
+        .unwrap();
+    wait_until(
+        || host.stdout_contains("after-checkpoint-input"),
+        UI_TIMEOUT,
+        "encrypted input after checkpoints",
+    );
+    host.type_line("printf '\\033]0;\\007'");
+    wait_js(&client, "sessionTitle === ''").await;
     client.execute("socket.close()", vec![]).await.unwrap();
     wait_js(
         &client,
@@ -498,7 +575,7 @@ async fn encrypted_sessions_unlock_roundtrip_and_replay() {
     .await;
     wait_js(
         &client,
-        "document.querySelector('.xterm-rows').textContent.includes('browser-secret-roundtrip')",
+        "document.querySelector('.xterm-rows').textContent.includes('checkpoint-output-1')",
     )
     .await;
     let sessions = client
@@ -593,8 +670,38 @@ async fn encrypted_sessions_unlock_roundtrip_and_replay() {
           const key = TcompCrypto.encode(new Uint8Array(32).fill(7));
           const cipher = await TcompCrypto.create(key, 'vector-session');
           const payload = await cipher.open(raw);
-          if (payload.screen !== 'hello €') throw new Error('vector mismatch');
+          if (payload.screen !== 'hello €' || !payload.restore) throw new Error('vector mismatch');
           if (await cipher.open(raw) !== null) throw new Error('replay accepted');
+          const encoder = new TextEncoder();
+          const master = await crypto.subtle.importKey('raw', new Uint8Array(32).fill(7), 'HKDF', false, ['deriveKey']);
+          const outputKey = await crypto.subtle.deriveKey({
+            name: 'HKDF', hash: 'SHA-256', salt: encoder.encode('vector-session'),
+            info: new Uint8Array([...encoder.encode('tcomp-e2ee-v1output'), ...raw.slice(6, 22)]),
+          }, master, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+          async function seal(payload, sequence, kind = 1) {
+            const header = raw.slice(0, 30);
+            header[5] = kind;
+            new DataView(header.buffer).setBigUint64(22, sequence);
+            const iv = new Uint8Array(12);
+            new DataView(iv.buffer).setBigUint64(4, sequence);
+            const body = await crypto.subtle.encrypt({
+              name: 'AES-GCM', iv, tagLength: 128,
+              additionalData: new Uint8Array([...encoder.encode('tcomp-e2ee-v1vector-session'), ...header]),
+            }, outputKey, encoder.encode(JSON.stringify(payload)));
+            return new Uint8Array([...header, ...new Uint8Array(body)]);
+          }
+          const checkpoint = await seal({ ...payload, checkpoint: true }, 1n);
+          if ((await cipher.open(checkpoint)).restore) throw new Error('contiguous checkpoint restored');
+          if (await cipher.open(checkpoint) !== null) throw new Error('checkpoint replay accepted');
+          if ((await cipher.open(await seal({ t: 'output', bytes: [65] }, 2n, 2))).bytes[0] !== 65) throw new Error('output after checkpoint lost');
+          if (!(await cipher.open(await seal({ ...payload, checkpoint: true }, 4n))).restore) throw new Error('gap not restored');
+          if (!(await cipher.open(await seal({ ...payload, checkpoint: false }, 5n))).restore) throw new Error('replacement not restored');
+          if (!(await cipher.open(await seal({ ...payload, restore: false }, 6n))).restore) throw new Error('legacy snapshot not restored');
+          let invalidRejected = false;
+          try { await cipher.open(await seal({ ...payload, checkpoint: 'true' }, 7n)); } catch (_) { invalidRejected = true; }
+          if (!invalidRejected) throw new Error('invalid checkpoint accepted');
+          const fresh = await TcompCrypto.create(key, 'vector-session');
+          if (!(await fresh.open(checkpoint)).restore) throw new Error('initial checkpoint not restored');
           for (const kind of ['tamper', 'version', 'short', 'session', 'key']) {
             const candidate = kind === 'short' ? raw.slice(0, 10) : raw.slice();
             if (kind === 'tamper') candidate[candidate.length - 1] ^= 1;

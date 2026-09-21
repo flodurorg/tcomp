@@ -46,6 +46,8 @@ pub enum EncryptedPayload {
         screen: String,
         carry: Vec<u8>,
         exit: Option<i32>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        checkpoint: bool,
     },
     Output {
         bytes: Vec<u8>,
@@ -54,6 +56,10 @@ pub enum EncryptedPayload {
         epoch: String,
         bytes: Vec<u8>,
     },
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -91,9 +91,11 @@
               || ![null, 'string'].includes(payload.title === null ? null : typeof payload.title)
               || ![null, 'string'].includes(payload.cwd === null ? null : typeof payload.cwd)
               || typeof payload.input !== 'boolean' || typeof payload.epoch !== 'string'
+              || (payload.checkpoint !== undefined && typeof payload.checkpoint !== 'boolean')
               || (payload.exit !== null && !Number.isInteger(payload.exit))) throw new Error('Invalid encrypted snapshot.');
           decode(payload.epoch);
           validateBytes(payload.carry);
+          payload.restore = payload.checkpoint !== true || lastSequence === null || sequence !== lastSequence + 1n;
           epoch = payload.epoch;
         } else {
           if (payload.t !== 'output' || lastSequence === null || sequence !== lastSequence + 1n) throw new Error('Encrypted output is incomplete. Reopen the session.');

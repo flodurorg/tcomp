@@ -69,6 +69,7 @@ impl Screen {
         epoch: &str,
         sender: &mut Sender,
         budget: usize,
+        checkpoint: bool,
     ) -> Result<Vec<u8>> {
         let payload = proto::EncryptedPayload::Snapshot {
             cols: self.cols,
@@ -82,6 +83,7 @@ impl Screen {
             screen: String::from_utf8(dump_bytes(&self.vt).to_vec())?,
             carry: self.carry.clone(),
             exit: self.exit,
+            checkpoint,
         };
         let frame = sender.seal(SNAPSHOT, &serde_json::to_vec(&payload)?)?;
         ensure!(frame.len() <= budget, "encrypted snapshot exceeds the relay history budget; increase TCOMP_HISTORY_BYTES on the relay");
@@ -187,7 +189,7 @@ async fn pump(
     mut receiver: InputReceiver,
     budget: usize,
 ) -> Result<bool> {
-    let snapshot = screen.snapshot(params, receiver.epoch(), sender, budget)?;
+    let snapshot = screen.snapshot(params, receiver.epoch(), sender, budget, false)?;
     let mut history_len = snapshot.len();
     if socket.send(Message::Binary(snapshot.into())).await.is_err() {
         return Ok(false);
@@ -223,12 +225,13 @@ async fn pump(
             }
             _ = checkpoint.tick(), if dirty => {
                 dirty = false;
-                let frame = screen.snapshot(params, receiver.epoch(), sender, budget)?;
+                let frame = screen.snapshot(params, receiver.epoch(), sender, budget, true)?;
                 history_len = frame.len();
                 frame
             }
             event = events.recv() => {
                 let Some(event) = event else { return Ok(true); };
+                let checkpoint = matches!(event, Event::Metadata(_) | Event::Exit { .. });
                 if let Some(bytes) = screen.update(event) {
                     dirty = true;
                     let payload = proto::EncryptedPayload::Output { bytes };
@@ -239,13 +242,13 @@ async fn pump(
                         sender.seal(OUTPUT, &plaintext)?
                     } else {
                         dirty = false;
-                        let frame = screen.snapshot(params, receiver.epoch(), sender, budget)?;
+                        let frame = screen.snapshot(params, receiver.epoch(), sender, budget, false)?;
                         history_len = frame.len();
                         frame
                     }
                 } else {
                     dirty = false;
-                    let frame = screen.snapshot(params, receiver.epoch(), sender, budget)?;
+                    let frame = screen.snapshot(params, receiver.epoch(), sender, budget, checkpoint)?;
                     history_len = frame.len();
                     frame
                 }
@@ -309,7 +312,13 @@ mod tests {
         }));
         let mut sender = Sender::new(params.key.as_ref().unwrap(), "test-session", false).unwrap();
         let frame = screen
-            .snapshot(&params, "epoch", &mut sender, proto::MAX_ENCRYPTED_FRAME)
+            .snapshot(
+                &params,
+                "epoch",
+                &mut sender,
+                proto::MAX_ENCRYPTED_FRAME,
+                false,
+            )
             .unwrap();
         let proto::EncryptedPayload::Snapshot {
             cols,
@@ -340,7 +349,105 @@ mod tests {
         let params = params();
         let screen = Screen::new(&params);
         let mut sender = Sender::new(params.key.as_ref().unwrap(), "test-session", false).unwrap();
-        assert!(screen.snapshot(&params, "epoch", &mut sender, 64).is_err());
+        assert!(screen
+            .snapshot(&params, "epoch", &mut sender, 64, false)
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn only_redundant_snapshots_are_checkpoints() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let params = params();
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let server = async {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            socket.next().await.unwrap().unwrap();
+            let ack = serde_json::json!({ "session": "test-session", "url": "http://localhost/s/test-session", "encryption": 2, "history_bytes": 16384 });
+            socket
+                .send(Message::Text(ack.to_string().into()))
+                .await
+                .unwrap();
+            assert!(matches!(
+                next_payload(&params, &mut socket).await,
+                proto::EncryptedPayload::Snapshot {
+                    checkpoint: false,
+                    ..
+                }
+            ));
+
+            events_tx
+                .send(Event::Output(b"live-output".to_vec()))
+                .unwrap();
+            assert!(matches!(next_payload(&params, &mut socket).await,
+                proto::EncryptedPayload::Output { bytes } if bytes == b"live-output"));
+            assert!(matches!(next_payload(&params, &mut socket).await,
+                proto::EncryptedPayload::Snapshot { checkpoint: true, screen, .. } if screen.contains("live-output")));
+
+            events_tx
+                .send(Event::Metadata(crate::modes::Seen {
+                    title: Some("new-title".into()),
+                    cwd: None,
+                }))
+                .unwrap();
+            assert!(matches!(next_payload(&params, &mut socket).await,
+                proto::EncryptedPayload::Snapshot { checkpoint: true, title, .. } if title.as_deref() == Some("new-title")));
+
+            events_tx
+                .send(Event::Resize {
+                    cols: 100,
+                    rows: 30,
+                })
+                .unwrap();
+            assert!(matches!(
+                next_payload(&params, &mut socket).await,
+                proto::EncryptedPayload::Snapshot {
+                    checkpoint: false,
+                    cols: 100,
+                    rows: 30,
+                    ..
+                }
+            ));
+
+            let mut bytes = vec![b'\r'; 16384];
+            bytes.extend_from_slice(b"budget-output");
+            events_tx.send(Event::Output(bytes)).unwrap();
+            assert!(matches!(next_payload(&params, &mut socket).await,
+                proto::EncryptedPayload::Snapshot { checkpoint: false, screen, .. } if screen.contains("budget-output")));
+
+            events_tx.send(Event::Exit { code: 7 }).unwrap();
+            assert!(matches!(
+                next_payload(&params, &mut socket).await,
+                proto::EncryptedPayload::Snapshot {
+                    checkpoint: true,
+                    exit: Some(7),
+                    ..
+                }
+            ));
+            let control = socket.next().await.unwrap().unwrap().into_text().unwrap();
+            assert!(matches!(
+                serde_json::from_str(&control),
+                Ok(proto::Producer::Exit { .. })
+            ));
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let (result, ()) = tokio::join!(run(&url, &params, &mut events_rx, None), server);
+            result.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn next_payload(
+        params: &Params,
+        socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> proto::EncryptedPayload {
+        loop {
+            if let Message::Binary(bytes) = socket.next().await.unwrap().unwrap() {
+                return decrypt(params, &bytes);
+            }
+        }
     }
 
     #[tokio::test]
@@ -361,7 +468,12 @@ mod tests {
                 .await
                 .unwrap();
             let first = socket.next().await.unwrap().unwrap().into_data();
-            let proto::EncryptedPayload::Snapshot { epoch, .. } = decrypt(&params, &first) else {
+            let proto::EncryptedPayload::Snapshot {
+                epoch,
+                checkpoint: false,
+                ..
+            } = decrypt(&params, &first)
+            else {
                 panic!("snapshot")
             };
             let mut input = Sender::new(key, "test-session", true).unwrap();
@@ -409,6 +521,7 @@ mod tests {
                 screen,
                 cols,
                 rows,
+                checkpoint: false,
                 ..
             } = decrypt(&params, &next)
             else {
