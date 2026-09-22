@@ -8,36 +8,42 @@
 
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
-      let pkgs = nixpkgs.legacyPackages.${system};
+      let
+        pkgs = nixpkgs.legacyPackages.${system};
+
+        rust = with pkgs; [
+          rustc
+          cargo
+          clippy
+          rustfmt
+          rust-analyzer
+          pkg-config
+        ];
+
+        browser = with pkgs; [
+          chromium
+          chromedriver
+          xterm
+          xvfb-run
+        ];
+
+        recording = with pkgs; [
+          bashInteractive
+          curl
+          dejavu_fonts
+          ffmpeg-full
+          gifsicle
+          jq
+          util-linux
+          websocat
+          xdotool
+          xsetroot
+        ];
       in {
         packages.default = pkgs.callPackage ./nix/package.nix { };
 
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            rustc
-            cargo
-            clippy
-            rustfmt
-            rust-analyzer
-            pkg-config
-            websocat
-
-            # docs/record-demo.sh
-            bashInteractive
-            chromium
-            ffmpeg-full
-            xvfb-run
-            gifsicle
-            xdotool
-            xterm
-            xsetroot
-            util-linux
-            dejavu_fonts
-            jq
-
-            # tests/floating_windows.rs
-            chromedriver
-          ];
+          packages = rust ++ browser;
           RUST_BACKTRACE = "1";
 
           shellHook = ''
@@ -50,9 +56,23 @@
               echo "  cargo fmt                                  format"
               echo "  cargo run -p tcomp -- standalone -- htop   try it locally"
               echo "  nix build                                  build the package"
-              echo "  docs/record-demo.sh                        regenerate the demo GIF"
               echo "  cargo test --test floating_windows -- --ignored"
-              echo "                                              run the browser e2e test"
+              echo "                                             run the browser e2e test"
+              echo "  nix develop .#demo                         shell for recording the demo GIF"
+              echo
+            fi
+          '';
+        };
+
+        devShells.demo = pkgs.mkShell {
+          packages = rust ++ browser ++ recording;
+          RUST_BACKTRACE = "1";
+
+          shellHook = ''
+            if [ -t 1 ]; then
+              echo "tcomp demo shell"
+              echo
+              echo "  ./docs/record-demo.sh                      regenerate docs/demo.gif"
               echo
             fi
           '';

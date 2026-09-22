@@ -425,8 +425,8 @@ cargo run -p tcomp -- standalone -- htop
 ```
 
 `web/` is read from disk per request, so viewer changes need no rebuild.
-`nix develop -c ./docs/record-demo.sh` regenerates the GIF above: start in a
-local terminal, open its session in a browser, then type from both sides with
-the two views side by side. `cargo test --test floating_windows -- --ignored`
-covers multiple sessions, selection, and input from both sides as browser-driven
-integration tests.
+`nix develop .#demo -c ./docs/record-demo.sh` regenerates the GIF above: start
+in a local terminal, open its session in a browser, then type from both sides
+with the two views side by side.
+`cargo test --test floating_windows -- --ignored` covers multiple sessions,
+selection, and input from both sides as browser-driven integration tests.

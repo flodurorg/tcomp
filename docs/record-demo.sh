@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerate docs/demo.gif, from the repo root:
-#   nix develop -c ./docs/record-demo.sh
+#   nix develop .#demo -c ./docs/record-demo.sh
 set -euo pipefail
 trap 'exit 130' INT
 trap 'exit 143' TERM
