@@ -23,11 +23,16 @@
             websocat
 
             # docs/record-demo.sh
+            bashInteractive
             chromium
             ffmpeg-full
             xvfb-run
             gifsicle
             xdotool
+            xterm
+            xsetroot
+            util-linux
+            dejavu_fonts
             jq
 
             # tests/floating_windows.rs

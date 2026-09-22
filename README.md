@@ -5,7 +5,7 @@ one binary: the relay either rides along with the command on the machine you are
 already on, or runs somewhere of its own that both the command and the browser
 can reach.
 
-![selecting one of several floating session windows and typing on both the terminal and the browser](docs/demo.gif)
+![Starting in a local terminal, opening its session in a browser, and typing from both sides with the output mirrored side by side](docs/demo.gif)
 
 ## Features
 
@@ -425,6 +425,8 @@ cargo run -p tcomp -- standalone -- htop
 ```
 
 `web/` is read from disk per request, so viewer changes need no rebuild.
-`docs/record-demo.sh` regenerates the GIF above. `cargo test --test
-floating_windows -- --ignored` covers the same flow (2-3 sessions, select
-one, type on both sides) as a browser-driven integration test.
+`nix develop -c ./docs/record-demo.sh` regenerates the GIF above: start in a
+local terminal, open its session in a browser, then type from both sides with
+the two views side by side. `cargo test --test floating_windows -- --ignored`
+covers multiple sessions, selection, and input from both sides as browser-driven
+integration tests.
