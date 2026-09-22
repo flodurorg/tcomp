@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.7.0](https://github.com/flodurorg/tcomp/compare/v0.6.0...v0.7.0) (2026-09-22)
+
+
+### Features
+
+* **encryption:** add opt-in end-to-end encrypted sessions ([6781d07](https://github.com/flodurorg/tcomp/commit/6781d07f37f920cd50d23d8d4b7ae6f538c92302))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate base64 to 0.23 ([3bd467c](https://github.com/flodurorg/tcomp/commit/3bd467ce37e439672ef168dd0d4bf3e8aa193a68))
+* **deps:** update rust crate base64 to 0.23 ([0a8b6fd](https://github.com/flodurorg/tcomp/commit/0a8b6fd53cdf16994d9169d6946edcc6d3e915ad))
+* **viewer:** avoid redraws on encrypted checkpoints ([07d802a](https://github.com/flodurorg/tcomp/commit/07d802ad152d2f81d1f4a6bea2d60ae4f22dd945))
+
+
+### Documentation
+
+* **demo:** show terminal and browser input side by side ([af7ffd0](https://github.com/flodurorg/tcomp/commit/af7ffd0ab38f68b65019c883a903a6093a657473))
+* **readme:** install from the registry or a release, split client and server ([81b3ff8](https://github.com/flodurorg/tcomp/commit/81b3ff87f5b8e55fc2626eb008541dec2ab49e5a))
+
 ## [0.6.0](https://github.com/flodurorg/tcomp/compare/v0.5.2...v0.6.0) (2026-09-20)
 
 
